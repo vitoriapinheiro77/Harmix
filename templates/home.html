@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block title %}Home — Harmix{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="card">
+        <h1>Welcome, {{ user.username }}!</h1>
+        <p style="color: #9a9ab0; margin-top: 0.5rem;">
+            You are signed in to Harmix. Start by uploading a music project.
+        </p>
+    </div>
+</div>
+{% endblock %}

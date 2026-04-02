@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}Sign In — Harmix{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="card">
+        <h1>Sign In</h1>
+
+        <form method="post" novalidate>
+            {% csrf_token %}
+
+            {% for field in form %}
+            <div class="form-group">
+                {{ field.label_tag }}
+                {{ field }}
+                {% if field.errors %}
+                <ul class="errorlist">
+                    {% for error in field.errors %}
+                    <li>{{ error }}</li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+            </div>
+            {% endfor %}
+
+            {% if form.non_field_errors %}
+            <ul class="errorlist">
+                {% for error in form.non_field_errors %}
+                <li>{{ error }}</li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+
+            <button type="submit" class="btn btn-primary">Sign In</button>
+        </form>
+
+        <p class="text-center mt-1">
+            Don't have an account? <a class="link" href="{% url 'register' %}">Create one</a>
+        </p>
+    </div>
+</div>
+{% endblock %}
