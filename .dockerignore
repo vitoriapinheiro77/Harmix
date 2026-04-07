@@ -1,0 +1,36 @@
+# Version control
+.git
+.gitignore
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Virtual environments
+env/
+venv/
+.venv/
+.env/
+
+# Environment variables (injected at runtime, not baked into image)
+.env
+
+# Django artifacts
+db.sqlite3
+staticfiles/
+media/
+
+# IDE and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Docker files (not needed inside the image)
+Dockerfile
+docker-compose.yml
+.dockerignore
