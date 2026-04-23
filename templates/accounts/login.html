@@ -1,406 +1,536 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Sign In — Harmix</title>
+  <title>Login — Harmix</title>
 
-  <!-- Poppins from Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
 
   <style>
-    /* ── Reset & tokens ─────────────────────────────────────────────────── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      /* Background – swap the gradient for a url() to use a photo */
-      --bg-gradient: linear-gradient(135deg, #050510 0%, #0d0522 50%, #130826 100%);
-
-      --accent:       #8b5cf6;
-      --accent-light: #a78bfa;
-      --accent-glow:  rgba(139, 92, 246, 0.35);
-      --cyan:         #06b6d4;
-
-      --glass-bg:     rgba(255, 255, 255, 0.045);
-      --glass-border: rgba(255, 255, 255, 0.10);
-
-      --text-primary: #f1f5f9;
-      --text-muted:   #94a3b8;
-
-      --input-bg:     rgba(255, 255, 255, 0.06);
-      --input-border: rgba(255, 255, 255, 0.12);
-
-      --error: #f87171;
+      /* Vintage-Moderno: Warm Brown e Teal */
+      --primary: #a17550;
+      --primary-light: #b8956d;
+      --primary-dark: #7a5340;
+      
+      /* Tons complementares vintage */
+      --accent-warm: #d4a574;
+      --accent-light: #e8d5c4;
+      
+      /* Escala neutra vintage-moderna */
+      --bg-light: #f5ede3;
+      --bg-white: #ffffff;
+      --text-dark: #2a2520;
+      --text-muted: #6b6057;
+      --border-light: #d9ccc0;
+      
+      /* Sombra moderna */
+      --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
+      --shadow-md: 0 8px 24px rgba(161, 117, 80, 0.12);
+      --shadow-lg: 0 12px 40px rgba(161, 117, 80, 0.15);
     }
 
     html, body { height: 100%; }
 
     body {
       font-family: 'Poppins', sans-serif;
-      color: var(--text-primary);
+      background: var(--bg-light);
+      color: var(--text-dark);
+      line-height: 1.6;
+    }
+
+    /* ── Split container ────────────────────────────────────────────────── */
+    .container {
+      display: flex;
       min-height: 100vh;
-      overflow-x: hidden;
+      overflow: hidden;
     }
 
-    /* ── Background ─────────────────────────────────────────────────────────
-     *  To use a custom background image, replace the value of --bg-gradient
-     *  above with: url('/static/images/your-image.jpg') center/cover no-repeat
-     *  and remove the radial-gradient overlays from .bg-radial if needed.
-     * ─────────────────────────────────────────────────────────────────────── */
-    .bg-base {
-      position: fixed; inset: 0; z-index: 0;
-      background: var(--bg-gradient);
+    /* Left side - Form */
+    .form-side {
+      flex: 0 0 33.333%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+      background: linear-gradient(135deg, #f5ede3 0%, #f9ede3 100%);
+      position: relative;
+      overflow: hidden;
     }
 
-    .bg-radial {
-      position: fixed; inset: 0; z-index: 1; pointer-events: none;
-      background:
-        radial-gradient(ellipse at 25% 15%, rgba(139, 92, 246, 0.14) 0%, transparent 55%),
-        radial-gradient(ellipse at 75% 85%, rgba(6, 182, 212, 0.10) 0%, transparent 55%);
+    /* Animated gradient background */
+    .form-side::before {
+      content: '';
+      position: absolute;
+      top: -50%;
+      right: -50%;
+      width: 200%;
+      height: 200%;
+      background: radial-gradient(circle, rgba(161, 117, 80, 0.04) 0%, transparent 70%);
+      animation: float 15s ease-in-out infinite;
+      pointer-events: none;
     }
 
-    /* ── Floating musical notes ─────────────────────────────────────────── */
-    .notes-layer {
-      position: fixed; inset: 0; z-index: 2;
-      pointer-events: none; overflow: hidden;
+    @keyframes float {
+      0%, 100% { transform: translate(0, 0); }
+      50% { transform: translate(20px, -20px); }
     }
 
-    .note {
-      position: absolute; bottom: -6%;
-      opacity: 0;
-      color: rgba(167, 139, 250, 0.22);
-      animation: float-note linear infinite;
-      user-select: none; pointer-events: none;
-      font-style: normal;
+    .form-wrap {
+      width: 100%;
+      max-width: 380px;
+      position: relative;
+      z-index: 1;
     }
 
-    @keyframes float-note {
-      0%   { transform: translateY(0)      rotate(0deg);   opacity: 0; }
-      8%   { opacity: 1; }
-      85%  { opacity: 0.55; }
-      100% { transform: translateY(-108vh) rotate(360deg); opacity: 0; }
+    .login-title {
+      font-size: 2.2rem;
+      font-weight: 700;
+      color: var(--text-dark);
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.5px;
     }
 
-    /* ── Audio spectrum (bottom decoration) ─────────────────────────────── */
-    .spectrum {
-      position: fixed; bottom: 0; left: 0;
-      width: 100%; height: 90px;
-      display: flex; align-items: flex-end; gap: 3px;
-      padding: 0 1%; z-index: 2; pointer-events: none;
-    }
-
-    .bar {
-      flex: 1; min-width: 0;
-      background: linear-gradient(to top, var(--accent), var(--cyan));
-      border-radius: 3px 3px 0 0;
-      opacity: 0.13;
-      animation: bar-pulse 1.0s ease-in-out infinite alternate;
-      transform-origin: bottom;
-    }
-
-    @keyframes bar-pulse {
-      from { transform: scaleY(0.12); }
-      to   { transform: scaleY(1);    }
-    }
-
-    /* ── Page layout ────────────────────────────────────────────────────── */
-    .page {
-      position: relative; z-index: 10;
-      min-height: 100vh;
-      display: flex; flex-direction: column;
-    }
-
-    /* ── Header ─────────────────────────────────────────────────────────── */
-    header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 1.25rem 3rem;
-      background: rgba(5, 5, 16, 0.55);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border-bottom: 1px solid var(--glass-border);
-    }
-
-    .logo {
-      font-size: 1.25rem; font-weight: 700;
-      color: var(--accent-light); letter-spacing: 1px;
-      text-decoration: none;
-    }
-    .logo span { color: var(--text-primary); }
-
-    .main-nav { display: flex; gap: 2rem; }
-
-    .main-nav a {
-      text-decoration: none;
+    .login-subtitle {
+      font-size: 0.9rem;
       color: var(--text-muted);
-      font-size: 0.875rem; font-weight: 500;
-      transition: color 0.2s;
-    }
-    .main-nav a:hover { color: var(--text-primary); }
-
-    .header-btns { display: flex; gap: 0.75rem; align-items: center; }
-
-    .btn-ghost {
-      padding: 0.4rem 1.15rem;
-      border-radius: 50px;
-      border: 1px solid var(--glass-border);
-      background: transparent;
-      color: var(--text-muted);
-      font-family: 'Poppins', sans-serif;
-      font-size: 0.8rem; font-weight: 500;
-      cursor: pointer; text-decoration: none;
-      transition: border-color 0.2s, color 0.2s;
-    }
-    .btn-ghost:hover { border-color: var(--accent); color: var(--accent-light); }
-
-    .btn-pill {
-      padding: 0.4rem 1.15rem;
-      border-radius: 50px; border: none;
-      background: var(--accent);
-      color: #fff;
-      font-family: 'Poppins', sans-serif;
-      font-size: 0.8rem; font-weight: 600;
-      cursor: pointer; text-decoration: none;
-      transition: background 0.2s, box-shadow 0.2s;
-    }
-    .btn-pill:hover {
-      background: var(--accent-light);
-      box-shadow: 0 0 22px var(--accent-glow);
+      margin-bottom: 2rem;
+      font-weight: 400;
     }
 
-    /* ── Main area ──────────────────────────────────────────────────────── */
-    main {
-      flex: 1;
-      display: flex; align-items: center; justify-content: center;
-      padding: 2rem 1rem 5rem;
+    /* Form fields */
+    .form-group {
+      margin-bottom: 1.3rem;
     }
 
-    /* ── Glass card ─────────────────────────────────────────────────────── */
-    .glass-card {
-      width: 100%; max-width: 420px;
-      background: var(--glass-bg);
-      border: 1px solid var(--glass-border);
-      border-radius: 22px;
-      padding: 2.5rem 2.25rem;
-      backdrop-filter: blur(26px);
-      -webkit-backdrop-filter: blur(26px);
-      box-shadow: 0 8px 48px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255,255,255,0.06);
-    }
-
-    .card-icon {
-      width: 50px; height: 50px;
-      border-radius: 14px;
-      background: linear-gradient(135deg, var(--accent), var(--cyan));
-      display: flex; align-items: center; justify-content: center;
-      font-size: 1.35rem;
-      margin-bottom: 1.25rem;
-      box-shadow: 0 4px 24px var(--accent-glow);
-    }
-
-    .card-title {
-      font-size: 1.6rem; font-weight: 700;
-      color: var(--text-primary); margin-bottom: 0.3rem;
-    }
-
-    .card-hint {
-      font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1.75rem;
-    }
-    .card-hint a {
-      color: var(--accent-light); text-decoration: none; font-weight: 500;
-    }
-    .card-hint a:hover { text-decoration: underline; }
-
-    /* ── Error messages ─────────────────────────────────────────────────── */
-    .error-banner {
-      background: rgba(248, 113, 113, 0.09);
-      border: 1px solid rgba(248, 113, 113, 0.28);
-      border-radius: 10px;
-      padding: 0.65rem 0.9rem;
-      margin-bottom: 1.1rem;
-    }
-    .error-banner li {
-      font-size: 0.78rem; color: var(--error); list-style: none;
-    }
-
-    /* ── Form fields ────────────────────────────────────────────────────── */
-    .field { margin-bottom: 1.1rem; }
-
-    .field-label {
+    .form-group label {
       display: block;
-      font-size: 0.72rem; font-weight: 600;
+      font-size: 0.8rem;
       color: var(--text-muted);
-      letter-spacing: 0.5px; text-transform: uppercase;
-      margin-bottom: 0.4rem;
+      margin-bottom: 0.6rem;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
     }
 
-    .input-wrap { position: relative; }
+    .input-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
 
     .input-icon {
-      position: absolute; left: 13px; top: 50%;
-      transform: translateY(-50%);
-      color: var(--text-muted);
-      pointer-events: none; display: flex; align-items: center;
+      position: absolute;
+      left: 14px;
+      display: flex;
+      align-items: center;
+      color: var(--primary);
+      opacity: 0.6;
+      transition: opacity 0.3s;
+      pointer-events: none;
     }
 
-    .input-wrap input {
+    .form-group input[type="email"],
+    .form-group input[type="password"],
+    .form-group input[type="text"] {
       width: 100%;
-      padding: 0.7rem 0.9rem 0.7rem 2.55rem;
-      background: var(--input-bg);
-      border: 1px solid var(--input-border);
-      border-radius: 10px;
-      color: var(--text-primary);
+      padding: 0.95rem 1.1rem 0.95rem 2.6rem;
+      border: 1.5px solid var(--border-light);
+      border-radius: 12px;
       font-family: 'Poppins', sans-serif;
-      font-size: 0.875rem;
-      transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+      font-size: 0.9rem;
+      color: var(--text-dark);
+      background: var(--bg-white);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: var(--shadow-sm);
     }
-    .input-wrap input::placeholder { color: rgba(148, 163, 184, 0.45); }
-    .input-wrap input:focus {
+
+    .form-group input::placeholder {
+      color: rgba(102, 102, 102, 0.5);
+    }
+
+    .form-group input:focus {
       outline: none;
-      border-color: var(--accent);
-      background: rgba(139, 92, 246, 0.06);
-      box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
+      border-color: var(--primary);
+      background: #fff;
+      box-shadow: 0 0 0 4px rgba(161, 117, 80, 0.1), var(--shadow-md);
+      padding-left: 2.6rem;
     }
 
-    .field-errors { list-style: none; margin-top: 0.35rem; }
-    .field-errors li { font-size: 0.73rem; color: var(--error); }
+    .form-group input:focus + .input-icon,
+    .form-group input:not(:placeholder-shown) + .input-icon {
+      opacity: 1;
+      color: var(--primary);
+    }
 
-    /* ── Bottom row ─────────────────────────────────────────────────────── */
+    .field-errors {
+      list-style: none;
+      margin-top: 0.45rem;
+      font-size: 0.75rem;
+    }
+
+    .field-errors li {
+      color: #e84c3d;
+      margin-bottom: 0.2rem;
+      animation: slideIn 0.3s ease-out;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateX(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(0);
+      }
+    }
+
+    .error-banner {
+      background: linear-gradient(135deg, rgba(161, 117, 80, 0.08), rgba(212, 165, 116, 0.06));
+      border-left: 4px solid var(--primary);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1.3rem;
+      font-size: 0.8rem;
+      animation: slideIn 0.3s ease-out;
+    }
+
+    .error-banner li {
+      color: #7a5340;
+      list-style: none;
+      font-weight: 500;
+    }
+
+    /* Links row */
     .form-row {
-      display: flex; align-items: center;
-      justify-content: space-between; margin-bottom: 1.6rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 1.2rem 0 1.8rem;
+      font-size: 0.8rem;
     }
 
-    .remember {
-      display: flex; align-items: center; gap: 0.45rem;
-      font-size: 0.78rem; color: var(--text-muted); cursor: pointer;
+    .remember-label {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      cursor: pointer;
+      color: var(--text-muted);
+      transition: color 0.2s;
+      user-select: none;
     }
-    .remember input[type="checkbox"] {
-      width: 15px; height: 15px;
-      accent-color: var(--accent); cursor: pointer;
+
+    .remember-label:hover {
+      color: var(--primary);
+    }
+
+    .remember-label input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--primary);
+      cursor: pointer;
+      border-radius: 4px;
+      transition: transform 0.2s;
+    }
+
+    .remember-label input[type="checkbox"]:checked {
+      transform: scale(1.1);
     }
 
     .forgot {
-      font-size: 0.78rem; color: var(--accent-light);
+      color: var(--primary);
       text-decoration: none;
-      transition: opacity 0.2s;
+      font-weight: 500;
+      transition: all 0.2s;
+      position: relative;
     }
-    .forgot:hover { opacity: 0.7; text-decoration: underline; }
 
-    /* ── Submit button ──────────────────────────────────────────────────── */
+    .forgot::after {
+      content: '';
+      position: absolute;
+      bottom: -2px;
+      left: 0;
+      width: 0;
+      height: 2px;
+      background: var(--primary);
+      transition: width 0.3s ease;
+    }
+
+    .forgot:hover::after {
+      width: 100%;
+    }
+
+    /* Submit button */
     .btn-submit {
       width: 100%;
-      padding: 0.8rem;
-      border-radius: 50px; border: none;
-      background: linear-gradient(135deg, var(--accent) 0%, #6d28d9 100%);
+      padding: 1rem;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
       color: #fff;
+      border: none;
+      border-radius: 12px;
       font-family: 'Poppins', sans-serif;
-      font-size: 0.95rem; font-weight: 600; letter-spacing: 0.3px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      letter-spacing: 0.3px;
       cursor: pointer;
-      transition: opacity 0.2s, box-shadow 0.2s, transform 0.15s;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: var(--shadow-md);
+      margin-bottom: 1.3rem;
+      position: relative;
+      overflow: hidden;
     }
-    .btn-submit:hover {
-      opacity: 0.9;
-      box-shadow: 0 6px 32px rgba(139, 92, 246, 0.5);
-      transform: translateY(-1px);
-    }
-    .btn-submit:active { transform: translateY(0); }
 
-    /* ── Responsive ─────────────────────────────────────────────────────── */
-    @media (max-width: 640px) {
-      header { padding: 1rem 1.25rem; }
-      .main-nav { display: none; }
-      .glass-card { padding: 2rem 1.35rem; }
+    .btn-submit::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+      transition: left 0.5s;
+    }
+
+    .btn-submit:hover::before {
+      left: 100%;
+    }
+
+    .btn-submit:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-lg);
+    }
+
+    .btn-submit:active {
+      transform: translateY(0);
+      box-shadow: var(--shadow-md);
+    }
+
+    /* Divider */
+    .divider {
+      display: flex;
+      align-items: center;
+      margin: 1.5rem 0;
+      color: var(--border-light);
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .divider::before,
+    .divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border-light);
+    }
+
+    .divider::before {
+      margin-right: 0.8rem;
+    }
+
+    .divider::after {
+      margin-left: 0.8rem;
+    }
+
+    /* Social login */
+    .social-links {
+      display: flex;
+      gap: 0.8rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .social-btn {
+      flex: 1;
+      height: 42px;
+      border-radius: 10px;
+      border: 1.5px solid var(--border-light);
+      background: var(--bg-white);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.3s;
+      text-decoration: none;
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 0.85rem;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .social-btn:hover {
+      border-color: var(--primary);
+      color: var(--primary);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(161, 117, 80, 0.15);
+    }
+
+    /* Sign up link */
+    .signup-link {
+      text-align: center;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .signup-link a {
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 600;
+      transition: all 0.2s;
+      position: relative;
+    }
+
+    .signup-link a::after {
+      content: '';
+      position: absolute;
+      bottom: -2px;
+      left: 0;
+      width: 0;
+      height: 2px;
+      background: var(--primary);
+      transition: width 0.3s ease;
+    }
+
+    .signup-link a:hover::after {
+      width: 100%;
+    }
+
+    /* Right side - Image */
+    .image-side {
+      flex: 0 0 66.667%;
+      background: url('/static/images/musicians.jpg') center/cover no-repeat;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .image-side::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: transparent;
+      pointer-events: none;
+    }
+
+    .image-overlay {
+      display: none;
+    }
+
+    .image-placeholder {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: rgba(255, 255, 255, 0.15);
+      font-size: 5rem;
+      z-index: 1;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .container {
+        flex-direction: column;
+      }
+
+      .image-side {
+        display: none;
+      }
+
+      .form-side {
+        min-height: 100vh;
+      }
+
+      .login-title {
+        font-size: 1.8rem;
+      }
+
+      .form-wrap {
+        max-width: 100%;
+      }
+
+      .form-row {
+        flex-direction: column;
+        gap: 1rem;
+        align-items: flex-start;
+      }
+
+      .forgot {
+        align-self: flex-end;
+      }
+
+      .social-links {
+        flex-direction: column;
+      }
+
+      .social-btn {
+        width: 100%;
+      }
+    }
+
+    /* Pulse animation */
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+
+    .btn-submit:disabled {
+      animation: pulse 2s ease-in-out infinite;
+      opacity: 0.8;
+      cursor: not-allowed;
     }
   </style>
 </head>
 <body>
 
-<!-- ── Background ──────────────────────────────────────────────────────────── -->
-<div class="bg-base" aria-hidden="true"></div>
-<div class="bg-radial" aria-hidden="true"></div>
+<div class="container">
 
-<!-- ── Floating notes ──────────────────────────────────────────────────────── -->
-<div class="notes-layer" aria-hidden="true">
-  <span class="note" style="left:4%;   font-size:1.1rem; animation-duration:16s; animation-delay:0s;">♩</span>
-  <span class="note" style="left:11%;  font-size:1.5rem; animation-duration:21s; animation-delay:3s;">♪</span>
-  <span class="note" style="left:19%;  font-size:0.95rem;animation-duration:13s; animation-delay:7s;">♫</span>
-  <span class="note" style="left:30%;  font-size:1.4rem; animation-duration:18s; animation-delay:1s;">♬</span>
-  <span class="note" style="left:42%;  font-size:1.1rem; animation-duration:14s; animation-delay:9s;">𝄞</span>
-  <span class="note" style="left:54%;  font-size:1.6rem; animation-duration:20s; animation-delay:5s;">♩</span>
-  <span class="note" style="left:65%;  font-size:1.0rem; animation-duration:12s; animation-delay:2s;">♫</span>
-  <span class="note" style="left:76%;  font-size:1.3rem; animation-duration:17s; animation-delay:6s;">♬</span>
-  <span class="note" style="left:85%;  font-size:1.5rem; animation-duration:22s; animation-delay:4s;">♪</span>
-  <span class="note" style="left:93%;  font-size:1.1rem; animation-duration:15s; animation-delay:10s;">𝄞</span>
-</div>
+  <!-- Left side - Form -->
+  <div class="form-side">
+    <div class="form-wrap">
 
-<!-- ── Spectrum bars ────────────────────────────────────────────────────────── -->
-<div class="spectrum" id="js-spectrum" aria-hidden="true"></div>
-
-<!-- ── Page ─────────────────────────────────────────────────────────────────── -->
-<div class="page">
-
-  <!-- Header -->
-  <header>
-    <a class="logo" href="{% url 'home' %}">HARMI<span>X.</span></a>
-
-    <nav class="main-nav" aria-label="Main navigation">
-      <a href="{% url 'home' %}">Home</a>
-      <a href="#">Blog</a>
-      <a href="#">Services</a>
-      <a href="#">About</a>
-    </nav>
-
-    <div class="header-btns">
-      <a class="btn-ghost" href="{% url 'login' %}">Sign In</a>
-      <a class="btn-pill"  href="{% url 'register' %}">Sign Up</a>
-    </div>
-  </header>
-
-  <!-- Main -->
-  <main>
-    <div class="glass-card">
-
-      <div class="card-icon" aria-hidden="true">🎵</div>
-
-      <h1 class="card-title">Welcome back</h1>
-      <p class="card-hint">
-        Don't have an account?
-        <a href="{% url 'register' %}">Sign Up</a>
-      </p>
+      <h1 class="login-title">Bem-vindo</h1>
+      <p class="login-subtitle">Faça login para acessar sua música</p>
 
       <form method="post" novalidate>
         {% csrf_token %}
 
         <!-- Non-field errors -->
         {% if form.non_field_errors %}
-        <ul class="error-banner">
+        <div class="error-banner">
           {% for error in form.non_field_errors %}
           <li>{{ error }}</li>
           {% endfor %}
-        </ul>
+        </div>
         {% endif %}
 
-        <!-- Username -->
-        <div class="field">
-          <label class="field-label" for="id_username">Username or Email</label>
-          <div class="input-wrap">
+        <!-- Email/Username -->
+        <div class="form-group">
+          <label for="id_username">E-mail ou Usuário</label>
+          <div class="input-wrapper">
+            <input
+              type="text"
+              id="id_username"
+              name="username"
+              placeholder="seu.email@harmix.com"
+              autocomplete="username"
+              value="{{ form.username.value|default:'' }}"
+            />
             <span class="input-icon">
-              <!-- User icon -->
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="12" cy="8" r="4"/>
                 <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
               </svg>
             </span>
-            <input
-              type="text"
-              id="id_username"
-              name="username"
-              placeholder="Enter your username"
-              autocomplete="username"
-              value="{{ form.username.value|default:'' }}"
-            />
           </div>
           {% if form.username.errors %}
           <ul class="field-errors">
@@ -410,24 +540,23 @@
         </div>
 
         <!-- Password -->
-        <div class="field">
-          <label class="field-label" for="id_password">Password</label>
-          <div class="input-wrap">
+        <div class="form-group">
+          <label for="id_password">Senha</label>
+          <div class="input-wrapper">
+            <input
+              type="password"
+              id="id_password"
+              name="password"
+              placeholder="Sua senha"
+              autocomplete="current-password"
+            />
             <span class="input-icon">
-              <!-- Lock icon -->
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
                 <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
               </svg>
             </span>
-            <input
-              type="password"
-              id="id_password"
-              name="password"
-              placeholder="Enter your password"
-              autocomplete="current-password"
-            />
           </div>
           {% if form.password.errors %}
           <ul class="field-errors">
@@ -436,40 +565,43 @@
           {% endif %}
         </div>
 
-        <!-- Remember me + Forgot password -->
+        <!-- Remember + Forgot -->
         <div class="form-row">
-          <label class="remember">
+          <label class="remember-label">
             <input type="checkbox" name="remember_me" />
-            Remember Me
+            <span>Lembrar de mim</span>
           </label>
-          <a class="forgot" href="#">Forgot password?</a>
+          <a href="#" class="forgot">Esqueceu a senha?</a>
         </div>
 
         <!-- Submit -->
-        <button type="submit" class="btn-submit">Sign In</button>
+        <button type="submit" class="btn-submit">Entrar</button>
 
       </form>
+
+      <!-- Divider -->
+      <div class="divider">ou</div>
+
+      <!-- Social -->
+      <div class="social-links">
+        <a href="#" class="social-btn" title="Conectar com Facebook">Facebook</a>
+        <a href="#" class="social-btn" title="Conectar com Google">Google</a>
+      </div>
+
+      <!-- Sign up -->
+      <div class="signup-link">
+        Não tem conta? <a href="{% url 'register' %}">Crie uma</a>
+      </div>
+
     </div>
-  </main>
+  </div>
 
-</div><!-- /.page -->
+  <!-- Right side - Image -->
+  <div class="image-side">
+    <div class="image-overlay"></div>
+  </div>
 
-<script>
-  /* Spectrum bars — pure decoration, generated in JS to avoid HTML repetition */
-  (function () {
-    var container = document.getElementById('js-spectrum');
-    var count = 42;
-    var frag = document.createDocumentFragment();
-    for (var i = 0; i < count; i++) {
-      var bar = document.createElement('div');
-      bar.className = 'bar';
-      bar.style.animationDuration  = (0.55 + Math.random() * 1.1).toFixed(2) + 's';
-      bar.style.animationDelay     = (Math.random() * 0.9).toFixed(2) + 's';
-      frag.appendChild(bar);
-    }
-    container.appendChild(frag);
-  })();
-</script>
+</div>
 
 </body>
 </html>

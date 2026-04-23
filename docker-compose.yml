@@ -21,10 +21,11 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "8001:8000"
+      - "8000:8000"
     env_file:
       - .env
     volumes:
+      - ./:/app
       - static_files:/app/staticfiles
       - media_files:/app/media
     depends_on:
