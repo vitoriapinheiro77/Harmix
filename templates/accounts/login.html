@@ -1,506 +1,59 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Login — Harmix</title>
-
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
-
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    :root {
-      /* Vintage-Moderno: Warm Brown e Teal */
-      --primary: #a17550;
-      --primary-light: #b8956d;
-      --primary-dark: #7a5340;
-      
-      /* Tons complementares vintage */
-      --accent-warm: #d4a574;
-      --accent-light: #e8d5c4;
-      
-      /* Escala neutra vintage-moderna */
-      --bg-light: #f5ede3;
-      --bg-white: #ffffff;
-      --text-dark: #2a2520;
-      --text-muted: #6b6057;
-      --border-light: #d9ccc0;
-      
-      /* Sombra moderna */
-      --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
-      --shadow-md: 0 8px 24px rgba(161, 117, 80, 0.12);
-      --shadow-lg: 0 12px 40px rgba(161, 117, 80, 0.15);
-    }
-
-    html, body { height: 100%; }
-
-    body {
-      font-family: 'Poppins', sans-serif;
-      background: var(--bg-light);
-      color: var(--text-dark);
-      line-height: 1.6;
-    }
-
-    /* ── Split container ────────────────────────────────────────────────── */
-    .container {
-      display: flex;
-      min-height: 100vh;
-      overflow: hidden;
-    }
-
-    /* Left side - Form */
-    .form-side {
-      flex: 0 0 33.333%;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 2rem;
-      background: linear-gradient(135deg, #f5ede3 0%, #f9ede3 100%);
-      position: relative;
-      overflow: hidden;
-    }
-
-    /* Animated gradient background */
-    .form-side::before {
-      content: '';
-      position: absolute;
-      top: -50%;
-      right: -50%;
-      width: 200%;
-      height: 200%;
-      background: radial-gradient(circle, rgba(161, 117, 80, 0.04) 0%, transparent 70%);
-      animation: float 15s ease-in-out infinite;
-      pointer-events: none;
-    }
-
-    @keyframes float {
-      0%, 100% { transform: translate(0, 0); }
-      50% { transform: translate(20px, -20px); }
-    }
-
-    .form-wrap {
-      width: 100%;
-      max-width: 380px;
-      position: relative;
-      z-index: 1;
-    }
-
-    .login-title {
-      font-size: 2.2rem;
-      font-weight: 700;
-      color: var(--text-dark);
-      margin-bottom: 0.5rem;
-      letter-spacing: -0.5px;
-    }
-
-    .login-subtitle {
-      font-size: 0.9rem;
-      color: var(--text-muted);
-      margin-bottom: 2rem;
-      font-weight: 400;
-    }
-
-    /* Form fields */
-    .form-group {
-      margin-bottom: 1.3rem;
-    }
-
-    .form-group label {
-      display: block;
-      font-size: 0.8rem;
-      color: var(--text-muted);
-      margin-bottom: 0.6rem;
-      font-weight: 600;
-      letter-spacing: 0.3px;
-      text-transform: uppercase;
-    }
-
-    .input-wrapper {
-      position: relative;
-      display: flex;
-      align-items: center;
-    }
-
-    .input-icon {
-      position: absolute;
-      left: 14px;
-      display: flex;
-      align-items: center;
-      color: var(--primary);
-      opacity: 0.6;
-      transition: opacity 0.3s;
-      pointer-events: none;
-    }
-
-    .form-group input[type="email"],
-    .form-group input[type="password"],
-    .form-group input[type="text"] {
-      width: 100%;
-      padding: 0.95rem 1.1rem 0.95rem 2.6rem;
-      border: 1.5px solid var(--border-light);
-      border-radius: 12px;
-      font-family: 'Poppins', sans-serif;
-      font-size: 0.9rem;
-      color: var(--text-dark);
-      background: var(--bg-white);
-      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      box-shadow: var(--shadow-sm);
-    }
-
-    .form-group input::placeholder {
-      color: rgba(102, 102, 102, 0.5);
-    }
-
-    .form-group input:focus {
-      outline: none;
-      border-color: var(--primary);
-      background: #fff;
-      box-shadow: 0 0 0 4px rgba(161, 117, 80, 0.1), var(--shadow-md);
-      padding-left: 2.6rem;
-    }
-
-    .form-group input:focus + .input-icon,
-    .form-group input:not(:placeholder-shown) + .input-icon {
-      opacity: 1;
-      color: var(--primary);
-    }
-
-    .field-errors {
-      list-style: none;
-      margin-top: 0.45rem;
-      font-size: 0.75rem;
-    }
-
-    .field-errors li {
-      color: #e84c3d;
-      margin-bottom: 0.2rem;
-      animation: slideIn 0.3s ease-out;
-    }
-
-    @keyframes slideIn {
-      from {
-        opacity: 0;
-        transform: translateX(-10px);
-      }
-      to {
-        opacity: 1;
-        transform: translateX(0);
-      }
-    }
-
-    .error-banner {
-      background: linear-gradient(135deg, rgba(161, 117, 80, 0.08), rgba(212, 165, 116, 0.06));
-      border-left: 4px solid var(--primary);
-      border-radius: 8px;
-      padding: 1rem;
-      margin-bottom: 1.3rem;
-      font-size: 0.8rem;
-      animation: slideIn 0.3s ease-out;
-    }
-
-    .error-banner li {
-      color: #7a5340;
-      list-style: none;
-      font-weight: 500;
-    }
-
-    /* Links row */
-    .form-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin: 1.2rem 0 1.8rem;
-      font-size: 0.8rem;
-    }
-
-    .remember-label {
-      display: flex;
-      align-items: center;
-      gap: 0.6rem;
-      cursor: pointer;
-      color: var(--text-muted);
-      transition: color 0.2s;
-      user-select: none;
-    }
-
-    .remember-label:hover {
-      color: var(--primary);
-    }
-
-    .remember-label input[type="checkbox"] {
-      width: 18px;
-      height: 18px;
-      accent-color: var(--primary);
-      cursor: pointer;
-      border-radius: 4px;
-      transition: transform 0.2s;
-    }
-
-    .remember-label input[type="checkbox"]:checked {
-      transform: scale(1.1);
-    }
-
-    .forgot {
-      color: var(--primary);
-      text-decoration: none;
-      font-weight: 500;
-      transition: all 0.2s;
-      position: relative;
-    }
-
-    .forgot::after {
-      content: '';
-      position: absolute;
-      bottom: -2px;
-      left: 0;
-      width: 0;
-      height: 2px;
-      background: var(--primary);
-      transition: width 0.3s ease;
-    }
-
-    .forgot:hover::after {
-      width: 100%;
-    }
-
-    /* Submit button */
-    .btn-submit {
-      width: 100%;
-      padding: 1rem;
-      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
-      color: #fff;
-      border: none;
-      border-radius: 12px;
-      font-family: 'Poppins', sans-serif;
-      font-size: 0.95rem;
-      font-weight: 600;
-      letter-spacing: 0.3px;
-      cursor: pointer;
-      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      box-shadow: var(--shadow-md);
-      margin-bottom: 1.3rem;
-      position: relative;
-      overflow: hidden;
-    }
-
-    .btn-submit::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: -100%;
-      width: 100%;
-      height: 100%;
-      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
-      transition: left 0.5s;
-    }
-
-    .btn-submit:hover::before {
-      left: 100%;
-    }
-
-    .btn-submit:hover {
-      transform: translateY(-2px);
-      box-shadow: var(--shadow-lg);
-    }
-
-    .btn-submit:active {
-      transform: translateY(0);
-      box-shadow: var(--shadow-md);
-    }
-
-    /* Divider */
-    .divider {
-      display: flex;
-      align-items: center;
-      margin: 1.5rem 0;
-      color: var(--border-light);
-      font-size: 0.8rem;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-
-    .divider::before,
-    .divider::after {
-      content: '';
-      flex: 1;
-      height: 1px;
-      background: var(--border-light);
-    }
-
-    .divider::before {
-      margin-right: 0.8rem;
-    }
-
-    .divider::after {
-      margin-left: 0.8rem;
-    }
-
-    /* Social login */
-    .social-links {
-      display: flex;
-      gap: 0.8rem;
-      margin-bottom: 1.5rem;
-    }
-
-    .social-btn {
-      flex: 1;
-      height: 42px;
-      border-radius: 10px;
-      border: 1.5px solid var(--border-light);
-      background: var(--bg-white);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      transition: all 0.3s;
-      text-decoration: none;
-      color: var(--text-muted);
-      font-weight: 600;
-      font-size: 0.85rem;
-      box-shadow: var(--shadow-sm);
-    }
-
-    .social-btn:hover {
-      border-color: var(--primary);
-      color: var(--primary);
-      transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(161, 117, 80, 0.15);
-    }
-
-    /* Sign up link */
-    .signup-link {
-      text-align: center;
-      font-size: 0.85rem;
-      color: var(--text-muted);
-    }
-
-    .signup-link a {
-      color: var(--primary);
-      text-decoration: none;
-      font-weight: 600;
-      transition: all 0.2s;
-      position: relative;
-    }
-
-    .signup-link a::after {
-      content: '';
-      position: absolute;
-      bottom: -2px;
-      left: 0;
-      width: 0;
-      height: 2px;
-      background: var(--primary);
-      transition: width 0.3s ease;
-    }
-
-    .signup-link a:hover::after {
-      width: 100%;
-    }
-
-    /* Right side - Image */
-    .image-side {
-      flex: 0 0 66.667%;
-      background: url('/static/images/musicians.jpg') center/cover no-repeat;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
-      position: relative;
-    }
-
-    .image-side::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: transparent;
-      pointer-events: none;
-    }
-
-    .image-overlay {
-      display: none;
-    }
-
-    .image-placeholder {
-      width: 100%;
-      height: 100%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: rgba(255, 255, 255, 0.15);
-      font-size: 5rem;
-      z-index: 1;
-    }
-
-    /* Responsive */
-    @media (max-width: 768px) {
-      .container {
-        flex-direction: column;
-      }
-
-      .image-side {
-        display: none;
-      }
-
-      .form-side {
-        min-height: 100vh;
-      }
-
-      .login-title {
-        font-size: 1.8rem;
-      }
-
-      .form-wrap {
-        max-width: 100%;
-      }
-
-      .form-row {
-        flex-direction: column;
-        gap: 1rem;
-        align-items: flex-start;
-      }
-
-      .forgot {
-        align-self: flex-end;
-      }
-
-      .social-links {
-        flex-direction: column;
-      }
-
-      .social-btn {
-        width: 100%;
-      }
-    }
-
-    /* Pulse animation */
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.7; }
-    }
-
-    .btn-submit:disabled {
-      animation: pulse 2s ease-in-out infinite;
-      opacity: 0.8;
-      cursor: not-allowed;
-    }
-  </style>
-</head>
-<body>
-
-<div class="container">
-
-  <!-- Left side - Form -->
-  <div class="form-side">
-    <div class="form-wrap">
-
-      <h1 class="login-title">Bem-vindo</h1>
-      <p class="login-subtitle">Faça login para acessar sua música</p>
-
-      <form method="post" novalidate>
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Login — Harmix{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/auth.css' %}">
+{% endblock %}
+
+{% block content %}
+<main class="auth-shell">
+  <section class="auth-layout">
+    <div class="auth-showcase">
+      <a class="auth-brand" href="{% url 'login' %}">
+        <span class="auth-brand-mark">H</span>
+        <span>Harmix</span>
+      </a>
+
+      <div class="auth-copy">
+        <span class="auth-eyebrow">Music SaaS Studio</span>
+        <h1>Entre no seu estudio musical inteligente.</h1>
+        <p>
+          Acesse seu painel para organizar musicas, preparar conversoes e manter seus
+          futuros PDFs musicais em um ambiente moderno e profissional.
+        </p>
+      </div>
+
+      <div class="auth-wave">
+        <span></span><span></span><span></span><span></span>
+        <span></span><span></span><span></span><span></span>
+      </div>
+
+      <div class="auth-stats">
+        <div class="auth-stat">
+          <strong>PDF</strong>
+          <span>partituras futuras</span>
+        </div>
+        <div class="auth-stat">
+          <strong>Chord</strong>
+          <span>acordes e estudos</span>
+        </div>
+        <div class="auth-stat">
+          <strong>Studio</strong>
+          <span>fluxo organizado</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="auth-card auth-card-login">
+      <div class="auth-card-header">
+        <span class="auth-eyebrow">Acesso seguro</span>
+        <h2>Bem-vindo</h2>
+        <p>Faça login para acessar sua música</p>
+      </div>
+
+      <form class="auth-form" method="post" novalidate>
         {% csrf_token %}
 
         <!-- Non-field errors -->
@@ -513,8 +66,8 @@
         {% endif %}
 
         <!-- Email/Username -->
-        <div class="form-group">
-          <label for="id_username">E-mail ou Usuário</label>
+        <div class="auth-field {% if form.username.errors %}has-error{% endif %}">
+          <label for="id_username">E-mail</label>
           <div class="input-wrapper">
             <input
               type="text"
@@ -540,7 +93,7 @@
         </div>
 
         <!-- Password -->
-        <div class="form-group">
+        <div class="auth-field {% if form.password.errors %}has-error{% endif %}">
           <label for="id_password">Senha</label>
           <div class="input-wrapper">
             <input
@@ -566,7 +119,7 @@
         </div>
 
         <!-- Remember + Forgot -->
-        <div class="form-row">
+        <div class="auth-helper-row">
           <label class="remember-label">
             <input type="checkbox" name="remember_me" />
             <span>Lembrar de mim</span>
@@ -576,7 +129,6 @@
 
         <!-- Submit -->
         <button type="submit" class="btn-submit">Entrar</button>
-
       </form>
 
       <!-- Divider -->
@@ -592,16 +144,7 @@
       <div class="signup-link">
         Não tem conta? <a href="{% url 'register' %}">Crie uma</a>
       </div>
-
     </div>
-  </div>
-
-  <!-- Right side - Image -->
-  <div class="image-side">
-    <div class="image-overlay"></div>
-  </div>
-
-</div>
-
-</body>
-</html>
+  </section>
+</main>
+{% endblock %}

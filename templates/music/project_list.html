@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Minhas musicas — Harmix{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/dashboard.css' %}">
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-shell">
+    <aside class="sidebar" aria-label="Menu principal">
+        <a class="sidebar-brand" href="{% url 'home' %}">
+            <span class="brand-mark">H</span>
+            <span>Harmix</span>
+        </a>
+
+        <nav class="sidebar-nav">
+            <a class="nav-item" href="{% url 'home' %}">
+                <span class="nav-icon">D</span>
+                Dashboard
+            </a>
+            <a class="nav-item active" href="{% url 'music:project_list' %}">
+                <span class="nav-icon">M</span>
+                Minhas musicas
+            </a>
+            <a class="nav-item" href="#">
+                <span class="nav-icon">F</span>
+                Favoritos
+            </a>
+            <a class="nav-item" href="#">
+                <span class="nav-icon">H</span>
+                Historico
+            </a>
+        </nav>
+    </aside>
+
+    <main class="main-panel">
+        <header class="topbar">
+            <div>
+                <span class="eyebrow">Biblioteca Harmix</span>
+                <p>Seus projetos musicais importados</p>
+            </div>
+
+            <div class="topbar-actions">
+                <a class="topbar-link" href="{% url 'home' %}">Novo link</a>
+                <form method="post" action="{% url 'logout' %}">
+                    {% csrf_token %}
+                    <button type="submit" class="logout-button">Logout</button>
+                </form>
+            </div>
+        </header>
+
+        <section class="library-card">
+            <div class="section-heading">
+                <div>
+                    <span class="eyebrow">Minhas musicas</span>
+                    <h2>Projetos criados a partir dos seus links</h2>
+                </div>
+                <a class="project-button primary" href="{% url 'home' %}">Adicionar link</a>
+            </div>
+
+            <div class="project-list">
+                {% for project in projects %}
+                <div class="project-list-item">
+                    <a class="project-list-link" href="{% url 'music:project_detail' project.pk %}">
+                        <span class="project-list-icon">M</span>
+                        <div>
+                            <strong>{{ project.title }}</strong>
+                            <p>{{ project.youtube_url }}</p>
+                        </div>
+                    </a>
+                    <div class="project-list-actions">
+                        <span class="status-badge status-{{ project.status }}">{{ project.get_status_display }}</span>
+                        <button
+                            type="button"
+                            class="project-delete-pill"
+                            data-delete-url="{% url 'music:project_delete' project.pk %}"
+                            data-project-title="{{ project.title }}"
+                            aria-label="Excluir {{ project.title }}"
+                        >
+                            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                <path d="M9 3h6a1 1 0 0 1 1 1v1h4v2h-1.1l-1.2 13.1A2.1 2.1 0 0 1 15.6 22H8.4a2.1 2.1 0 0 1-2.1-1.9L5.1 7H4V5h4V4a1 1 0 0 1 1-1Zm1 2h4V5h-4Zm-2.9 2 1.18 12.92a.1.1 0 0 0 .1.08h7.24a.1.1 0 0 0 .1-.08L16.9 7H7.1Zm2.4 3h2v7h-2v-7Zm3 0h2v7h-2v-7Z" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                {% empty %}
+                <div class="empty-state">
+                    <span class="feature-icon">URL</span>
+                    <h3>Nenhum projeto musical ainda</h3>
+                    <p>Cole um link na dashboard para iniciar seu primeiro projeto no Harmix.</p>
+                    <a class="project-button primary" href="{% url 'home' %}">Criar primeiro projeto</a>
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+    </main>
+</div>
+
+<dialog class="delete-project-modal" id="deleteProjectModal" aria-labelledby="deleteProjectTitle">
+    <form method="post" class="delete-project-dialog" id="deleteProjectForm">
+        {% csrf_token %}
+        <span class="delete-project-icon">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M9 3h6a1 1 0 0 1 1 1v1h4v2h-1.1l-1.2 13.1A2.1 2.1 0 0 1 15.6 22H8.4a2.1 2.1 0 0 1-2.1-1.9L5.1 7H4V5h4V4a1 1 0 0 1 1-1Zm1 2h4V5h-4Zm-2.9 2 1.18 12.92a.1.1 0 0 0 .1.08h7.24a.1.1 0 0 0 .1-.08L16.9 7H7.1Zm2.4 3h2v7h-2v-7Zm3 0h2v7h-2v-7Z" />
+            </svg>
+        </span>
+        <div>
+            <span class="eyebrow">Excluir projeto</span>
+            <h3 id="deleteProjectTitle">Tem certeza que deseja excluir este projeto?</h3>
+            <p>Esta ação não poderá ser desfeita.</p>
+            <strong id="deleteProjectName"></strong>
+        </div>
+        <div class="delete-project-dialog-actions">
+            <button type="button" class="project-button ghost" id="cancelDeleteProject">Cancelar</button>
+            <button type="submit" class="project-button danger">Excluir definitivamente</button>
+        </div>
+    </form>
+</dialog>
+
+<script>
+    const deleteModal = document.getElementById('deleteProjectModal');
+    const deleteForm = document.getElementById('deleteProjectForm');
+    const deleteName = document.getElementById('deleteProjectName');
+    const cancelDelete = document.getElementById('cancelDeleteProject');
+
+    document.querySelectorAll('.project-delete-pill').forEach((button) => {
+        button.addEventListener('click', (event) => {
+            event.stopPropagation();
+            deleteForm.action = button.dataset.deleteUrl;
+            deleteName.textContent = button.dataset.projectTitle || '';
+            deleteModal.showModal();
+        });
+    });
+
+    cancelDelete.addEventListener('click', () => {
+        deleteModal.close();
+    });
+
+    deleteModal.addEventListener('click', (event) => {
+        if (event.target === deleteModal) {
+            deleteModal.close();
+        }
+    });
+</script>
+{% endblock %}

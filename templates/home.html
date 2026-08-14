@@ -1,14 +1,295 @@
 {% extends "base.html" %}
+{% load static %}
 
-{% block title %}Home — Harmix{% endblock %}
+{% block title %}Dashboard — Harmix{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/dashboard.css' %}">
+{% endblock %}
 
 {% block content %}
-<div class="container">
-    <div class="card">
-        <h1>Welcome, {{ user.username }}!</h1>
-        <p style="color: #9a9ab0; margin-top: 0.5rem;">
-            You are signed in to Harmix. Start by uploading a music project.
-        </p>
-    </div>
+<div class="dashboard-shell">
+    <aside class="sidebar" aria-label="Menu principal">
+        <a class="sidebar-brand" href="{% url 'home' %}">
+            <span class="brand-mark">H</span>
+            <span>Harmix</span>
+        </a>
+
+        <nav class="sidebar-nav">
+            <a class="nav-item active" href="#">
+                <span class="nav-icon">D</span>
+                Dashboard
+            </a>
+            <a class="nav-item" href="{% url 'music:project_list' %}">
+                <span class="nav-icon">M</span>
+                Minhas musicas
+            </a>
+            <a class="nav-item" href="#">
+                <span class="nav-icon">F</span>
+                Favoritos
+            </a>
+            <a class="nav-item" href="#">
+                <span class="nav-icon">H</span>
+                Historico
+            </a>
+            <a class="nav-item" href="#">
+                <span class="nav-icon">C</span>
+                Configuracoes
+            </a>
+        </nav>
+
+        <div class="sidebar-card">
+            <span class="eyebrow">Studio mode</span>
+            <strong>Organize suas conversoes em um unico lugar.</strong>
+            <p>PDFs, acordes e historico aparecerao aqui nas proximas etapas.</p>
+        </div>
+    </aside>
+
+    <main class="main-panel">
+        <header class="topbar">
+            <div>
+                <span class="eyebrow">Dashboard musical</span>
+                <p>Bem-vindo, {% if user.first_name %}{{ user.first_name }}{% else %}{{ user.email }}{% endif %}</p>
+            </div>
+
+            <div class="topbar-actions">
+                <a class="topbar-link" href="#">Ajuda</a>
+                <a class="topbar-link" href="#">Planos</a>
+                <form method="post" action="{% url 'logout' %}">
+                    {% csrf_token %}
+                    <button type="submit" class="logout-button">Logout</button>
+                </form>
+            </div>
+        </header>
+
+        <section class="hero-grid">
+            <div class="hero-card">
+                <div class="hero-content">
+                    <span class="pill">Audio intelligence para musicos</span>
+                    <h1>Transforme musicas em partituras e PDFs</h1>
+                    <p>
+                        Envie seu arquivo de audio e o Harmix analisa BPM, tonalidade,
+                        acordes e gera uma partitura em PDF pronta para estudar.
+                    </p>
+
+                    <form
+                        class="upload-form"
+                        id="uploadForm"
+                        action="{% url 'music:project_create' %}"
+                        method="post"
+                        enctype="multipart/form-data"
+                        aria-label="Enviar arquivo de audio"
+                    >
+                        {% csrf_token %}
+
+                        <label class="upload-zone" id="uploadZone" for="audioFileInput">
+                            <input
+                                type="file"
+                                id="audioFileInput"
+                                name="audio_file"
+                                accept="audio/*"
+                                required
+                            >
+                            <div class="upload-zone-icon" aria-hidden="true">
+                                <span style="height:20px"></span><span style="height:34px"></span>
+                                <span style="height:48px"></span><span style="height:38px"></span>
+                                <span style="height:56px"></span><span style="height:42px"></span>
+                                <span style="height:30px"></span>
+                            </div>
+                            <strong id="uploadLabel">Arraste o arquivo aqui ou clique para selecionar</strong>
+                            <p>MP3 · WAV · FLAC · OGG · M4A · AAC · OPUS — ate 100 MB</p>
+                        </label>
+
+                        <div class="upload-row">
+                            <input
+                                class="upload-title-input"
+                                type="text"
+                                name="title"
+                                maxlength="255"
+                                placeholder="Titulo do projeto (opcional)"
+                            >
+                            <input
+                                class="upload-title-input"
+                                type="text"
+                                name="artist"
+                                maxlength="255"
+                                placeholder="Artista (opcional)"
+                            >
+                            <button class="upload-submit-btn" type="submit">Gerar PDF</button>
+                        </div>
+                    </form>
+
+                    <div class="hero-meta">
+                        <span>PDF musical</span>
+                        <span>Analise de acordes</span>
+                        <span>BPM e tonalidade</span>
+                    </div>
+                </div>
+
+                <div class="audio-visual" aria-hidden="true">
+                    <div class="orb orb-one"></div>
+                    <div class="orb orb-two"></div>
+                    <div class="wave-bars">
+                        <span></span><span></span><span></span><span></span><span></span>
+                        <span></span><span></span><span></span><span></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="status-card">
+                <span class="eyebrow">Pipeline Harmix</span>
+                <h2>Como funciona</h2>
+                <p>Envie qualquer arquivo de audio e receba uma partitura completa em segundos.</p>
+                <div class="status-list">
+                    <span>1. Upload do arquivo</span>
+                    <span>2. Analise BPM e tom</span>
+                    <span>3. Extracao de acordes</span>
+                    <span>4. PDF pronto</span>
+                </div>
+            </div>
+        </section>
+
+        <script>
+        (function () {
+            const zone = document.getElementById('uploadZone');
+            const input = document.getElementById('audioFileInput');
+            const label = document.getElementById('uploadLabel');
+
+            input.addEventListener('change', function () {
+                if (this.files && this.files[0]) {
+                    label.textContent = this.files[0].name;
+                    zone.classList.add('has-file');
+                }
+            });
+
+            ['dragenter', 'dragover'].forEach(function (evt) {
+                zone.addEventListener(evt, function (e) {
+                    e.preventDefault();
+                    zone.classList.add('drag-over');
+                });
+            });
+
+            ['dragleave', 'drop'].forEach(function (evt) {
+                zone.addEventListener(evt, function (e) {
+                    e.preventDefault();
+                    zone.classList.remove('drag-over');
+                });
+            });
+
+            zone.addEventListener('drop', function (e) {
+                const file = e.dataTransfer.files[0];
+                if (file) {
+                    const dt = new DataTransfer();
+                    dt.items.add(file);
+                    input.files = dt.files;
+                    label.textContent = file.name;
+                    zone.classList.add('has-file');
+                }
+            });
+        })();
+        </script>
+
+        <section class="feature-section">
+            <div class="section-heading">
+                <span class="eyebrow">Ferramentas futuras</span>
+                <h2>Um hub musical para estudar, converter e organizar</h2>
+            </div>
+
+            <div class="feature-grid">
+                <article class="feature-card">
+                    <span class="feature-icon">PDF</span>
+                    <h3>Conversao para PDF</h3>
+                    <p>Prepare partituras e materiais musicais exportaveis em poucos passos.</p>
+                </article>
+                <article class="feature-card">
+                    <span class="feature-icon">CH</span>
+                    <h3>Extracao de acordes</h3>
+                    <p>Visualize acordes detectados e organize trechos importantes da musica.</p>
+                </article>
+                <article class="feature-card">
+                    <span class="feature-icon">HI</span>
+                    <h3>Historico de musicas</h3>
+                    <p>Acompanhe tudo que voce ja enviou, converteu ou marcou para revisar.</p>
+                </article>
+                <article class="feature-card">
+                    <span class="feature-icon">FV</span>
+                    <h3>Favoritos</h3>
+                    <p>Salve musicas importantes para acessar rapidamente no seu estudo.</p>
+                </article>
+                <article class="feature-card">
+                    <span class="feature-icon">UP</span>
+                    <h3>Upload de arquivos</h3>
+                    <p>Uma area preparada para receber audios locais nas proximas etapas.</p>
+                </article>
+                <article class="feature-card">
+                    <span class="feature-icon">OR</span>
+                    <h3>Organizacao musical</h3>
+                    <p>Crie uma biblioteca musical limpa, moderna e focada no seu progresso.</p>
+                </article>
+            </div>
+        </section>
+
+        <section class="activity-section">
+            <div class="activity-card">
+                <div class="section-heading compact">
+                    <span class="eyebrow">Atividade recente</span>
+                    <h2>Resumo do estudio</h2>
+                </div>
+
+                <div class="activity-list">
+                    <div class="activity-item">
+                        <span class="activity-dot"></span>
+                        <div>
+                            <strong>Musica convertida</strong>
+                            <p>"Midnight Groove" preparada para PDF</p>
+                        </div>
+                        <time>Hoje</time>
+                    </div>
+                    <div class="activity-item">
+                        <span class="activity-dot"></span>
+                        <div>
+                            <strong>PDF gerado</strong>
+                            <p>"Acoustic Study" salvo nos arquivos recentes</p>
+                        </div>
+                        <time>Ontem</time>
+                    </div>
+                    <div class="activity-item">
+                        <span class="activity-dot"></span>
+                        <div>
+                            <strong>Ultimo acesso</strong>
+                            <p>Sessao iniciada no painel Harmix</p>
+                        </div>
+                        <time>2 dias</time>
+                    </div>
+                </div>
+            </div>
+
+            <div class="recent-files-card">
+                <span class="eyebrow">Arquivos recentes</span>
+                <div class="file-row">
+                    <span>PDF</span>
+                    <p>progression-study.pdf</p>
+                </div>
+                <div class="file-row">
+                    <span>AUD</span>
+                    <p>jazz-loop-demo.mp3</p>
+                </div>
+                <div class="file-row">
+                    <span>CH</span>
+                    <p>chord-map-session.json</p>
+                </div>
+            </div>
+        </section>
+
+        <footer class="dashboard-footer">
+            <strong>Harmix</strong>
+            <span>Musica, tecnologia e organizacao para seu fluxo criativo.</span>
+            <div>
+                <a href="#">Termos</a>
+                <a href="#">Privacidade</a>
+                <a href="#">Contato</a>
+            </div>
+        </footer>
+    </main>
 </div>
 {% endblock %}

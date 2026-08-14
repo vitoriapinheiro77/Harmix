@@ -1,0 +1,311 @@
+{% extends "base.html" %}
+{% load static %}
+{% load debug_extras %}
+
+{% block title %}{{ project.title }} — Harmix{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/dashboard.css' %}">
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-shell">
+    <aside class="sidebar" aria-label="Menu principal">
+        <a class="sidebar-brand" href="{% url 'home' %}">
+            <span class="brand-mark">H</span>
+            <span>Harmix</span>
+        </a>
+
+        <nav class="sidebar-nav">
+            <a class="nav-item" href="{% url 'home' %}">
+                <span class="nav-icon">D</span>
+                Dashboard
+            </a>
+            <a class="nav-item active" href="{% url 'music:project_list' %}">
+                <span class="nav-icon">M</span>
+                Minhas musicas
+            </a>
+            <a class="nav-item" href="#">
+                <span class="nav-icon">F</span>
+                Favoritos
+            </a>
+            <a class="nav-item" href="#">
+                <span class="nav-icon">H</span>
+                Historico
+            </a>
+        </nav>
+    </aside>
+
+    <main class="main-panel">
+        <header class="topbar">
+            <div>
+                <span class="eyebrow">Projeto musical</span>
+                <p>{{ project.title }}</p>
+            </div>
+
+            <div class="topbar-actions">
+                <a class="topbar-link" href="{% url 'music:project_list' %}">Minhas musicas</a>
+                <form method="post" action="{% url 'logout' %}">
+                    {% csrf_token %}
+                    <button type="submit" class="logout-button">Logout</button>
+                </form>
+            </div>
+        </header>
+
+        <section class="project-page-grid">
+            <article class="project-main-card">
+                <span class="pill">Audio em processamento</span>
+                <h1>{{ project.title }}</h1>
+                <p>
+                    O arquivo foi salvo e o Harmix processa em segundo plano:
+                    analise de BPM e tonalidade, separacao harmonica/percussiva,
+                    extracao de acordes, geracao de MusicXML e exportacao em PDF.
+                </p>
+
+                {% if project.audio_file %}
+                <div class="project-link-box">
+                    <span>Arquivo de audio</span>
+                    <a href="{{ project.audio_file.url }}" target="_blank" rel="noopener noreferrer">
+                        {{ project.audio_file.name|slice:"20:" }}
+                    </a>
+                </div>
+                {% endif %}
+
+                <div class="project-actions">
+                    <a class="project-button primary" href="{% url 'home' %}">Enviar outro arquivo</a>
+                    <a class="project-button ghost" href="{% url 'music:project_list' %}">Ver minhas musicas</a>
+                    {% if project.audio_file %}
+                    <form method="post" action="{% url 'music:project_reprocess' project.pk %}">
+                        {% csrf_token %}
+                        <button type="submit" class="project-button ghost">Reprocessar projeto</button>
+                    </form>
+                    {% endif %}
+                    {% if score and project.status == 'done' %}
+                    <a class="project-button primary" href="{% url 'music:export_pdf' project.pk %}" target="_blank" rel="noopener noreferrer">Exportar PDF</a>
+                    {% endif %}
+                    {% if score and score.musicxml_file %}
+                    <a class="project-button ghost" href="{% url 'music:score_edit' project.pk %}">Editar partitura</a>
+                    {% endif %}
+                </div>
+            </article>
+
+            <aside class="project-status-panel">
+                <span class="eyebrow">Status atual</span>
+                <strong class="status-badge status-{{ project.status }}">{{ project.get_status_display }}</strong>
+
+                <div class="project-meta-list">
+                    <div>
+                        <span>Etapa</span>
+                        <strong>{% if project.processing_step %}{{ project.processing_step }}{% else %}Aguardando{% endif %}</strong>
+                    </div>
+                    <div>
+                        <span>Criado em</span>
+                        <strong>{{ project.created_at|date:"d/m/Y H:i" }}</strong>
+                    </div>
+                    <div>
+                        <span>Tom</span>
+                        <strong>{% if project.key %}{{ project.key }}{% else %}Pendente{% endif %}</strong>
+                    </div>
+                    <div>
+                        <span>BPM</span>
+                        <strong>{% if project.bpm %}{{ project.bpm }}{% else %}Pendente{% endif %}</strong>
+                    </div>
+                </div>
+
+                {% if project.error_message %}
+                <div class="project-error-box">
+                    <span>Erro</span>
+                    <p>{{ project.error_message }}</p>
+                </div>
+                {% endif %}
+            </aside>
+        </section>
+
+        <section class="pipeline-card">
+            <div class="section-heading compact">
+                <span class="eyebrow">Pipeline Harmix</span>
+                <h2>Proximas etapas do processamento</h2>
+            </div>
+
+            <div class="pipeline-list">
+                {% for step in pipeline_steps %}
+                <div class="pipeline-step {% if project.status == 'done' or forloop.first %}done{% endif %}">
+                    <span>{{ forloop.counter }}</span>
+                    <p>{{ step }}</p>
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+
+        {% if project.status == 'done' %}
+        <section class="pipeline-card">
+            <div class="section-heading compact">
+                <span class="eyebrow">Audicao e debug</span>
+                <h2>Faixas separadas</h2>
+            </div>
+            <p class="audio-debug-intro">
+                Ouça o audio original e os stems para conferir a separacao. A faixa
+                <strong>Harmonia para cifra</strong> é a enviada ao Chordino.
+            </p>
+
+            <div class="audio-track-list">
+                {% if project.audio_file %}
+                <article class="audio-track-card">
+                    <div class="audio-track-heading">
+                        <div>
+                            <span class="audio-track-kind">Original</span>
+                            <strong>Audio enviado</strong>
+                        </div>
+                        <a class="audio-download-link" href="{% url 'music:project_original_audio' project.pk %}" download>Baixar</a>
+                    </div>
+                    <audio controls preload="metadata">
+                        <source src="{% url 'music:project_original_audio' project.pk %}">
+                        Seu navegador nao suporta a reproducao de audio.
+                    </audio>
+                </article>
+                {% endif %}
+
+                {% for track in tracks %}
+                {% if track.audio_file %}
+                <article class="audio-track-card">
+                    <div class="audio-track-heading">
+                        <div>
+                            <span class="audio-track-kind">Stem</span>
+                            <strong>{{ track.instrument_name }}</strong>
+                        </div>
+                        <a class="audio-download-link" href="{% url 'music:project_track_audio' project.pk track.pk %}" download>Baixar</a>
+                    </div>
+                    <audio controls preload="metadata">
+                        <source src="{% url 'music:project_track_audio' project.pk track.pk %}">
+                        Seu navegador nao suporta a reproducao de audio.
+                    </audio>
+                </article>
+                {% endif %}
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+
+        <section class="pipeline-card">
+            <div class="section-heading compact">
+                <span class="eyebrow">Revisao musical</span>
+                <h2>Resultado extraido</h2>
+            </div>
+
+            {% if tracks %}
+            <div class="project-list">
+                {% for track in tracks %}
+                <div class="project-list-item">
+                    <span class="project-list-icon">T</span>
+                    <div>
+                        <strong>{{ track.instrument_name }}</strong>
+                        <p>{% if track.audio_file %}{{ track.audio_file.name }}{% else %}Arquivo pendente{% endif %}</p>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty-state">
+                <span class="feature-icon">AUD</span>
+                <h3>Faixas ainda nao geradas</h3>
+                <p>O worker criara stems harmonic/percussive quando o download e analise terminarem.</p>
+            </div>
+            {% endif %}
+
+            {% if score.data.chords %}
+            <div class="chord-review-grid">
+                {% for chord in score.data.chords %}
+                <div class="chord-chip">
+                    <strong>{{ chord.chord_name }}</strong>
+                    <span>{{ chord.start_time }}s - {{ chord.end_time }}s</span>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </section>
+
+        {% if score.data.structure.measures %}
+        <section class="pipeline-card">
+            <div class="section-heading compact">
+                <span class="eyebrow">Estrutura musical</span>
+                <h2>Compassos organizados</h2>
+            </div>
+
+            <div class="measure-grid">
+                {% for measure in score.data.structure.measures %}
+                <article class="measure-card">
+                    <span class="measure-number">Compasso {{ measure.number }}</span>
+                    <div class="measure-chords">
+                        {% for chord in measure.chords %}
+                        <div class="measure-chord">
+                            <strong>{{ chord.chord_name }}</strong>
+                            <span>beat {{ chord.beat_start }} · {{ chord.beat_duration }} tempos</span>
+                        </div>
+                        {% empty %}
+                        <div class="measure-chord muted">
+                            <strong>N.C.</strong>
+                            <span>sem acorde detectado</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </article>
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+
+        {% if score.data.pipeline_log %}
+        <section class="pipeline-card debug-panel">
+            <div class="section-heading compact">
+                <span class="eyebrow">Inspecao do pipeline</span>
+                <h2>Log de processamento</h2>
+            </div>
+            <p class="debug-intro">Clique em cada etapa para ver o que foi detectado e os dados brutos.</p>
+
+            {% for entry in score.data.pipeline_log %}
+            <details class="debug-step">
+                <summary class="debug-step-summary">
+                    <span class="debug-step-number">{{ forloop.counter }}</span>
+                    <strong>{{ entry.step }}</strong>
+                </summary>
+                <div class="debug-step-body">
+                    {% for key, value in entry.details.items %}
+                    <div class="debug-row">
+                        <span class="debug-key">{{ key }}</span>
+                        <div class="debug-value">{{ value|debug_format }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </details>
+            {% endfor %}
+        </section>
+        {% endif %}
+    </main>
+</div>
+
+{% if project.status != 'done' and project.status != 'error' %}
+<script>
+(function () {
+    const statusUrl = "{% url 'music:project_status' project.pk %}";
+    const poll = window.setInterval(async function () {
+        try {
+            const response = await fetch(statusUrl, {
+                headers: { 'Accept': 'application/json' },
+                credentials: 'same-origin',
+            });
+            if (!response.ok) {
+                return;
+            }
+            const data = await response.json();
+            if (data.status === 'done' || data.status === 'error') {
+                window.clearInterval(poll);
+                window.location.reload();
+            }
+        } catch (error) {
+            // Ignora falhas temporarias de rede durante o polling.
+        }
+    }, 3000);
+})();
+</script>
+{% endif %}
+{% endblock %}

@@ -1,18 +1,22 @@
+{% load static %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Harmix{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: system-ui, sans-serif; background: #0f0f11; color: #e2e2e2; min-height: 100vh; }
+        body { font-family: Inter, system-ui, sans-serif; background: #0f0f11; color: #e2e2e2; min-height: 100vh; }
         .container { max-width: 480px; margin: 80px auto; padding: 0 16px; }
         h1 { font-size: 1.75rem; margin-bottom: 1.5rem; }
         .card { background: #1a1a1f; border: 1px solid #2e2e38; border-radius: 10px; padding: 2rem; }
         .form-group { margin-bottom: 1.2rem; }
         label { display: block; font-size: 0.85rem; color: #9a9ab0; margin-bottom: 6px; }
-        input[type="text"], input[type="email"], input[type="password"] {
+        input[type="text"], input[type="email"], input[type="password"], input[type="number"], select {
             width: 100%; padding: 0.6rem 0.8rem; background: #0f0f11;
             border: 1px solid #2e2e38; border-radius: 6px; color: #e2e2e2; font-size: 0.95rem;
         }
@@ -27,28 +31,25 @@
         .text-center { text-align: center; }
         .mt-1 { margin-top: 1rem; }
         .errorlist { color: #e06c75; font-size: 0.82rem; list-style: none; margin-top: 4px; }
+        .message-container {
+            position: fixed;
+            z-index: 50;
+            top: 18px;
+            right: 18px;
+            width: min(420px, calc(100vw - 36px));
+            margin: 0;
+            padding: 0;
+        }
         .messages { list-style: none; margin-bottom: 1rem; }
         .messages li { padding: 0.6rem 0.8rem; border-radius: 6px; font-size: 0.9rem; }
         .messages .success { background: #1e3a2f; border: 1px solid #2e6b4f; color: #98d9b8; }
         .messages .error   { background: #3a1e1e; border: 1px solid #6b2e2e; color: #d99898; }
-        nav { display: flex; justify-content: space-between; align-items: center;
-              padding: 1rem 2rem; border-bottom: 1px solid #2e2e38; }
-        nav .brand { color: #7c6fcd; font-weight: 700; font-size: 1.2rem; text-decoration: none; }
     </style>
+    {% block extra_css %}{% endblock %}
 </head>
 <body>
-    {% if user.is_authenticated %}
-    <nav>
-        <a class="brand" href="{% url 'home' %}">Harmix</a>
-        <form method="post" action="{% url 'logout' %}">
-            {% csrf_token %}
-            <button type="submit" class="btn btn-secondary">Logout</button>
-        </form>
-    </nav>
-    {% endif %}
-
     {% if messages %}
-    <div class="container">
+    <div class="message-container">
         <ul class="messages">
             {% for message in messages %}
             <li class="{{ message.tags }}">{{ message }}</li>

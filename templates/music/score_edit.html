@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Editar partitura — {{ project.title }}{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/dashboard.css' %}">
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-shell">
+    <aside class="sidebar" aria-label="Menu principal">
+        <a class="sidebar-brand" href="{% url 'home' %}">
+            <span class="brand-mark">H</span>
+            <span>Harmix</span>
+        </a>
+
+        <nav class="sidebar-nav">
+            <a class="nav-item" href="{% url 'home' %}">
+                <span class="nav-icon">D</span>
+                Dashboard
+            </a>
+            <a class="nav-item active" href="{% url 'music:project_list' %}">
+                <span class="nav-icon">M</span>
+                Minhas musicas
+            </a>
+            <a class="nav-item" href="{% url 'music:project_detail' project.pk %}">
+                <span class="nav-icon">P</span>
+                Projeto
+            </a>
+        </nav>
+    </aside>
+
+    <main class="main-panel">
+        <header class="topbar">
+            <div>
+                <span class="eyebrow">Editor de partitura</span>
+                <p>{{ project.title }}</p>
+            </div>
+
+            <div class="topbar-actions">
+                <a class="topbar-link" href="{% url 'music:project_detail' project.pk %}">Voltar ao projeto</a>
+                <form method="post" action="{% url 'logout' %}">
+                    {% csrf_token %}
+                    <button type="submit" class="logout-button">Logout</button>
+                </form>
+            </div>
+        </header>
+
+        <form class="score-editor" method="post">
+            {% csrf_token %}
+
+            <section class="pipeline-card score-editor-hero">
+                <div>
+                    <span class="pill">Revisao musical</span>
+                    <h1>Editar partitura</h1>
+                    <p>
+                        Ajuste o titulo, tom, BPM e os acordes detectados. Ao salvar,
+                        o Harmix gera novamente o PDF e o MusicXML com suas correcoes.
+                    </p>
+                </div>
+
+                <div class="score-editor-actions">
+                    <button class="project-button primary" type="submit">Salvar partitura</button>
+                    <a class="project-button ghost" href="{% url 'music:project_detail' project.pk %}">Cancelar</a>
+                </div>
+            </section>
+
+            <section class="pipeline-card">
+                <div class="score-meta-grid">
+                    <label>
+                        <span>Titulo</span>
+                        <input type="text" name="title" value="{{ score_data.title|default:project.title }}" maxlength="255">
+                    </label>
+                    <label>
+                        <span>Artista</span>
+                        <input type="text" name="artist" value="{{ score_data.artist|default:'nome do cantor' }}" maxlength="255">
+                    </label>
+                    <label>
+                        <span>Tom</span>
+                        <input type="text" name="key" value="{{ score_data.key|default:project.key }}" placeholder="Ex: Dm">
+                    </label>
+                    <label>
+                        <span>BPM</span>
+                        <input type="number" name="bpm" value="{{ score_data.bpm|default:project.bpm }}" min="1" max="300">
+                    </label>
+                </div>
+            </section>
+
+            <section class="pipeline-card">
+                <div class="section-heading compact">
+                    <span class="eyebrow">Mapa de acordes</span>
+                    <h2>Acordes detectados</h2>
+                </div>
+
+                {% if chords %}
+                <div class="score-chord-table" aria-label="Acordes editaveis">
+                    <div class="score-chord-head">
+                        <span>Inicio</span>
+                        <span>Fim</span>
+                        <span>Acorde</span>
+                    </div>
+
+                    {% for chord in chords %}
+                    <div class="score-chord-row">
+                        <input type="number" name="start_time" value="{{ chord.start_time }}" step="0.01" min="0">
+                        <input type="number" name="end_time" value="{{ chord.end_time }}" step="0.01" min="0">
+                        <input type="text" name="chord_name" value="{{ chord.chord_name }}" placeholder="Ex: Dm">
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="empty-state">
+                    <span class="feature-icon">CH</span>
+                    <h3>Nenhum acorde encontrado</h3>
+                    <p>Quando o pipeline encontrar acordes, eles aparecerao aqui para revisao.</p>
+                </div>
+                {% endif %}
+            </section>
+
+            {% if score_data.structure.measures %}
+            <section class="pipeline-card">
+                <div class="section-heading compact">
+                    <span class="eyebrow">Estrutura musical</span>
+                    <h2>Previa por compassos</h2>
+                </div>
+
+                <div class="measure-grid">
+                    {% for measure in score_data.structure.measures %}
+                    <article class="measure-card">
+                        <span class="measure-number">Compasso {{ measure.number }}</span>
+                        <div class="measure-chords">
+                            {% for chord in measure.chords %}
+                            <div class="measure-chord">
+                                <strong>{{ chord.chord_name }}</strong>
+                                <span>beat {{ chord.beat_start }} · {{ chord.beat_duration }} tempos</span>
+                            </div>
+                            {% empty %}
+                            <div class="measure-chord muted">
+                                <strong>N.C.</strong>
+                                <span>sem acorde detectado</span>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </article>
+                    {% endfor %}
+                </div>
+            </section>
+            {% endif %}
+        </form>
+    </main>
+</div>
+{% endblock %}

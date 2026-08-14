@@ -12,15 +12,15 @@ class TrackInline(admin.TabularInline):
 class ScoreInline(admin.StackedInline):
     model = Score
     extra = 0
-    fields = ('data',)
+    fields = ('data', 'musicxml_file', 'pdf_file')
 
 
 @admin.register(MusicProject)
 class MusicProjectAdmin(admin.ModelAdmin):
-    list_display = ('title', 'user', 'status', 'key', 'bpm', 'created_at')
+    list_display = ('title', 'user', 'status', 'key', 'bpm', 'created_at', 'completed_at')
     list_filter = ('status',)
-    search_fields = ('title', 'user__username')
-    readonly_fields = ('created_at',)
+    search_fields = ('title', 'user__email', 'user__first_name')
+    readonly_fields = ('created_at', 'updated_at', 'completed_at', 'task_id')
     inlines = [TrackInline, ScoreInline]
 
 

@@ -1,0 +1,30 @@
+# Ambiente
+.env
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Django / runtime
+staticfiles/
+media/
+db.sqlite3
+
+# Arquivos locais/sensiveis
+cookies.txt
+
+# Cobertura e logs
+.coverage
+htmlcov/
+*.log
+
+# IDE / sistema
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -16,24 +16,71 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Redis broker for async jobs ────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
   # ── Django application ────────────────────────────────────────────────────
   web:
     build: .
     restart: unless-stopped
     ports:
       - "8000:8000"
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      YT_DLP_COOKIES_FILE: /app/cookies.txt
     env_file:
       - .env
     volumes:
       - ./:/app
       - static_files:/app/staticfiles
       - media_files:/app/media
+      - ./cookies.txt:/app/cookies.txt:ro
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
+
+  # ── Async audio processing worker ──────────────────────────────────────────
+  worker:
+    build: .
+    restart: unless-stopped
+    command: celery -A config worker -l info --concurrency=1 --max-tasks-per-child=1
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      YT_DLP_COOKIES_FILE: /app/cookies.txt
+      TORCH_HOME: /models/torch
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      HARMIX_DEMUCS_MODEL: htdemucs
+      HARMIX_DEMUCS_SEGMENT: "6"
+      HARMIX_DEMUCS_SHIFTS: "0"
+      HARMIX_DEMUCS_JOBS: "1"
+    env_file:
+      - .env
+    volumes:
+      - ./:/app
+      - static_files:/app/staticfiles
+      - media_files:/app/media
+      - demucs_models:/models
+      - ./cookies.txt:/app/cookies.txt:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
 
 # ── Named volumes ─────────────────────────────────────────────────────────────
 volumes:
   postgres_data:
   static_files:
   media_files:
+  demucs_models:

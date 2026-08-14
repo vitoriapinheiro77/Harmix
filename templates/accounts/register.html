@@ -1,35 +1,127 @@
 {% extends "base.html" %}
+{% load static %}
 
-{% block title %}Create Account — Harmix{% endblock %}
+{% block title %}Cadastro — Harmix{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/auth.css' %}">
+{% endblock %}
 
 {% block content %}
-<div class="container">
-    <div class="card">
-        <h1>Create Account</h1>
+<main class="auth-shell">
+    <section class="auth-layout">
+        <div class="auth-showcase">
+            <a class="auth-brand" href="{% url 'login' %}">
+                <span class="auth-brand-mark">H</span>
+                <span>Harmix</span>
+            </a>
 
-        <form method="post" novalidate>
+            <div class="auth-copy">
+                <span class="auth-eyebrow">Crie seu studio</span>
+                <h1>Comece sua biblioteca musical premium.</h1>
+                <p>
+                    Cadastre-se para acessar um painel pensado para conversoes musicais,
+                    organizacao de estudos, favoritos e futuras partituras em PDF.
+                </p>
+            </div>
+
+            <div class="auth-wave">
+                <span></span><span></span><span></span><span></span>
+                <span></span><span></span><span></span><span></span>
+            </div>
+
+            <div class="auth-stats">
+                <div class="auth-stat">
+                    <strong>Links</strong>
+                    <span>YouTube e mais</span>
+                </div>
+                <div class="auth-stat">
+                    <strong>PDFs</strong>
+                    <span>materiais futuros</span>
+                </div>
+                <div class="auth-stat">
+                    <strong>Music</strong>
+                    <span>fluxo criativo</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="auth-card auth-card-register">
+            <div class="auth-card-header">
+                <span class="auth-eyebrow">Nova conta</span>
+                <h2>Create Account</h2>
+                <p>Preencha seus dados para entrar no Harmix.</p>
+            </div>
+
+        <form class="auth-form auth-form-register" method="post" novalidate>
             {% csrf_token %}
 
-            {% for field in form %}
-            <div class="form-group">
-                {{ field.label_tag }}
-                {{ field }}
-                {% if field.errors %}
-                <ul class="errorlist">
-                    {% for error in field.errors %}
-                    <li>{{ error }}</li>
-                    {% endfor %}
-                </ul>
+            {% if form.non_field_errors %}
+            <ul class="auth-error-banner">
+                {% for error in form.non_field_errors %}<li>{{ error }}</li>{% endfor %}
+            </ul>
+            {% endif %}
+
+            <div class="auth-field {% if form.name.errors %}has-error{% endif %}">
+                {{ form.name.label_tag }}
+                {{ form.name }}
+                {% if form.name.errors %}
+                <ul class="errorlist">{% for e in form.name.errors %}<li>{{ e }}</li>{% endfor %}</ul>
                 {% endif %}
             </div>
-            {% endfor %}
+
+            <div class="auth-field {% if form.email.errors %}has-error{% endif %}">
+                {{ form.email.label_tag }}
+                {{ form.email }}
+                {% if form.email.errors %}
+                <ul class="errorlist">{% for e in form.email.errors %}<li>{{ e }}</li>{% endfor %}</ul>
+                {% endif %}
+            </div>
+
+            <div class="auth-field {% if form.age.errors %}has-error{% endif %}">
+                {{ form.age.label_tag }}
+                {{ form.age }}
+                {% if form.age.errors %}
+                <ul class="errorlist">{% for e in form.age.errors %}<li>{{ e }}</li>{% endfor %}</ul>
+                {% endif %}
+            </div>
+
+            <div class="auth-field {% if form.gender.errors %}has-error{% endif %}">
+                {{ form.gender.label_tag }}
+                {{ form.gender }}
+                {% if form.gender.errors %}
+                <ul class="errorlist">{% for e in form.gender.errors %}<li>{{ e }}</li>{% endfor %}</ul>
+                {% endif %}
+            </div>
+
+            <div class="auth-field {% if form.password1.errors %}has-error{% endif %}">
+                {{ form.password1.label_tag }}
+                {{ form.password1 }}
+                {% if form.password1.errors %}
+                <ul class="errorlist">{% for e in form.password1.errors %}<li>{{ e }}</li>{% endfor %}</ul>
+                {% endif %}
+            </div>
+
+            <div class="auth-field {% if form.password2.errors %}has-error{% endif %}">
+                {{ form.password2.label_tag }}
+                {{ form.password2 }}
+                {% if form.password2.errors %}
+                <ul class="errorlist">{% for e in form.password2.errors %}<li>{{ e }}</li>{% endfor %}</ul>
+                {% endif %}
+            </div>
 
             <button type="submit" class="btn btn-primary">Register</button>
         </form>
 
-        <p class="text-center mt-1">
+        <div class="auth-mini-note">
+            <span>✓</span>
+            <p>Seu acesso sera usado para organizar suas musicas, PDFs e historico dentro do Harmix.</p>
+        </div>
+
+        <p class="auth-footer">
             Already have an account? <a class="link" href="{% url 'login' %}">Sign in</a>
         </p>
     </div>
-</div>
+    </section>
+</main>
 {% endblock %}
