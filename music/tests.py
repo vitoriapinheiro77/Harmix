@@ -10,7 +10,7 @@ from django.urls import reverse
 from .analysis.chordino_labels import chord_changes_to_events, normalize_chordino_label
 from .analysis.bpm_detector import _madmom_primary_bpm
 from .analysis.chord_stability import harmonic_family, stabilize_chord_detections
-from .models import MusicProject, Track
+from .models import MusicProject, Score, Track
 from .pipeline import HarmixPipeline
 from .separation import SeparationError, run_demucs, select_chord_source
 from .structure import MusicalStructureBuilder, build_musical_structure
@@ -98,6 +98,260 @@ class MusicalStructureBuilderTests(TestCase):
         self.assertEqual([chord['chord_name'] for chord in chords], ['C', 'G'])
         self.assertEqual([chord['beat_start'] for chord in chords], [0, 2])
 
+    def test_next_measure_anticipation_is_not_promoted_to_second_chord(self):
+        structure = build_musical_structure(
+            [
+                {'start_time': 0.0, 'end_time': 4.0, 'chord_name': 'F'},
+                {'start_time': 4.0, 'end_time': 8.0, 'chord_name': 'F'},
+                {'start_time': 8.0, 'end_time': 10.5, 'chord_name': 'C'},
+                {'start_time': 10.5, 'end_time': 16.0, 'chord_name': 'Em7'},
+            ],
+            bpm=60,
+        )
+
+        chord_names = [
+            [chord['chord_name'] for chord in measure['chords']]
+            for measure in structure['measures']
+        ]
+        self.assertEqual(chord_names, [['F'], ['F'], ['C'], ['Em7']])
+
+    def test_two_half_measure_changes_are_preserved(self):
+        structure = build_musical_structure(
+            [
+                {'start_time': 0.0, 'end_time': 2.0, 'chord_name': 'C'},
+                {'start_time': 2.0, 'end_time': 4.0, 'chord_name': 'G'},
+                {'start_time': 4.0, 'end_time': 6.0, 'chord_name': 'Am'},
+                {'start_time': 6.0, 'end_time': 8.0, 'chord_name': 'F'},
+            ],
+            bpm=60,
+        )
+
+        chord_names = [
+            [chord['chord_name'] for chord in measure['chords']]
+            for measure in structure['measures']
+        ]
+        self.assertEqual(chord_names, [['C', 'G'], ['Am', 'F']])
+
+    def test_near_tie_uses_entry_chord_as_provisional_primary(self):
+        with self.assertLogs('music.structure', level='INFO') as captured_logs:
+            structure = build_musical_structure(
+                [
+                    {'start_time': 0.0, 'end_time': 1.989, 'chord_name': 'F'},
+                    {'start_time': 1.989, 'end_time': 4.0, 'chord_name': 'C'},
+                ],
+                bpm=60,
+            )
+
+        chords = structure['measures'][0]['chords']
+        self.assertEqual(
+            [chord['chord_name'] for chord in chords],
+            ['F', 'C'],
+        )
+        log_output = '\n'.join(captured_logs.output)
+        self.assertIn('ambiguous_balanced_split: entry=F duration_winner=C', log_output)
+        self.assertIn('reliable_measures=0 total_measures=1', log_output)
+
+    def test_half_measure_change_remains_real_when_it_continues_next(self):
+        structure = build_musical_structure(
+            [
+                {'start_time': 0.0, 'end_time': 2.0, 'chord_name': 'C'},
+                {'start_time': 2.0, 'end_time': 8.0, 'chord_name': 'G'},
+            ],
+            bpm=60,
+        )
+
+        chord_names = [
+            [chord['chord_name'] for chord in measure['chords']]
+            for measure in structure['measures']
+        ]
+        self.assertEqual(chord_names, [['C', 'G'], ['G']])
+
+    def test_late_change_without_next_measure_confirmation_is_preserved(self):
+        structure = build_musical_structure(
+            [
+                {'start_time': 0.0, 'end_time': 2.5, 'chord_name': 'C'},
+                {'start_time': 2.5, 'end_time': 4.0, 'chord_name': 'G'},
+                {'start_time': 4.0, 'end_time': 8.0, 'chord_name': 'Am'},
+            ],
+            bpm=60,
+        )
+
+        first_measure = structure['measures'][0]['chords']
+        self.assertEqual(
+            [chord['chord_name'] for chord in first_measure],
+            ['C', 'G'],
+        )
+
+    def test_repeating_four_measure_pattern_corrects_late_spillovers(self):
+        chord_events = []
+        progression = ['F', 'F', 'C', 'Em7']
+        ambiguous_measure_indexes = {6, 14}
+        for measure_index in range(16):
+            measure_start = measure_index * 4.0
+            chord_name = progression[measure_index % len(progression)]
+            if measure_index in ambiguous_measure_indexes:
+                chord_events.extend(
+                    [
+                        {
+                            'start_time': measure_start,
+                            'end_time': measure_start + 1.989,
+                            'chord_name': chord_name,
+                        },
+                        {
+                            'start_time': measure_start + 1.989,
+                            'end_time': measure_start + 4.0,
+                            'chord_name': 'Em7',
+                        },
+                    ]
+                )
+            else:
+                chord_events.append(
+                    {
+                        'start_time': measure_start,
+                        'end_time': measure_start + 4.0,
+                        'chord_name': chord_name,
+                    }
+                )
+
+        with self.assertLogs('music.structure', level='INFO') as captured_logs:
+            structure = build_musical_structure(
+                chord_events,
+                bpm=60,
+            )
+
+        chord_names = [
+            [chord['chord_name'] for chord in measure['chords']]
+            for measure in structure['measures']
+        ]
+        self.assertEqual(
+            chord_names,
+            [
+                ['F'], ['F'], ['C'], ['Em7'],
+                ['F'], ['F'], ['C'], ['Em7'],
+                ['F'], ['F'], ['C'], ['Em7'],
+                ['F'], ['F'], ['C'], ['Em7'],
+            ],
+        )
+        log_output = '\n'.join(captured_logs.output)
+        self.assertIn('Detected harmonic cycle: length=4', log_output)
+        self.assertIn('Measure 7 classified as ambiguous_balanced_split', log_output)
+        self.assertIn('Measure 15 classified as ambiguous_balanced_split', log_output)
+        self.assertIn(
+            'Pattern correction on measure 7 (ambiguous_balanced_split)',
+            log_output,
+        )
+        self.assertIn(
+            'Pattern correction on measure 15 (ambiguous_balanced_split)',
+            log_output,
+        )
+
+    def test_repeating_real_two_chord_measures_are_not_forced_into_single_chords(self):
+        structure = build_musical_structure(
+            [
+                {'start_time': 0.0, 'end_time': 2.0, 'chord_name': 'C'},
+                {'start_time': 2.0, 'end_time': 4.0, 'chord_name': 'G'},
+                {'start_time': 4.0, 'end_time': 6.0, 'chord_name': 'Am'},
+                {'start_time': 6.0, 'end_time': 8.0, 'chord_name': 'F'},
+                {'start_time': 8.0, 'end_time': 10.0, 'chord_name': 'C'},
+                {'start_time': 10.0, 'end_time': 12.0, 'chord_name': 'G'},
+                {'start_time': 12.0, 'end_time': 14.0, 'chord_name': 'Am'},
+                {'start_time': 14.0, 'end_time': 16.0, 'chord_name': 'F'},
+            ],
+            bpm=60,
+        )
+
+        chord_names = [
+            [chord['chord_name'] for chord in measure['chords']]
+            for measure in structure['measures']
+        ]
+        self.assertEqual(chord_names, [['C', 'G'], ['Am', 'F'], ['C', 'G'], ['Am', 'F']])
+
+    def test_cycle_phase_blocks_single_with_strong_local_contradiction(self):
+        chord_events = []
+        progression = ['F', 'F', 'C', 'Em7']
+        for measure_index in range(16):
+            measure_start = measure_index * 4.0
+            chord_name = progression[measure_index % len(progression)]
+            if measure_index == 7:
+                chord_events.extend(
+                    [
+                        {
+                            'start_time': measure_start,
+                            'end_time': measure_start + 3.0,
+                            'chord_name': 'C',
+                        },
+                        {
+                            'start_time': measure_start + 3.0,
+                            'end_time': measure_start + 4.0,
+                            'chord_name': 'Em7',
+                        },
+                    ]
+                )
+            else:
+                chord_events.append(
+                    {
+                        'start_time': measure_start,
+                        'end_time': measure_start + 4.0,
+                        'chord_name': chord_name,
+                    }
+                )
+
+        with self.assertLogs('music.structure', level='INFO') as captured_logs:
+            structure = build_musical_structure(chord_events, bpm=60)
+
+        self.assertEqual(
+            [chord['chord_name'] for chord in structure['measures'][7]['chords']],
+            ['C'],
+        )
+        log_output = '\n'.join(captured_logs.output)
+        self.assertIn('Detected cycle phase: phase=0 expected_measure_one=F', log_output)
+        self.assertIn(
+            'Phase-based single correction blocked on measure 8: strong_local_evidence detected=C expected=Em7.',
+            log_output,
+        )
+
+    def test_pattern_is_not_applied_after_section_break(self):
+        chord_events = []
+        for measure_index, chord_name in enumerate(
+            ['F', 'F', 'C', 'Em7'] * 3
+        ):
+            measure_start = measure_index * 4.0
+            chord_events.append(
+                {
+                    'start_time': measure_start,
+                    'end_time': measure_start + 4.0,
+                    'chord_name': chord_name,
+                }
+            )
+        chord_events.extend(
+            [
+                {'start_time': 48.0, 'end_time': 50.0, 'chord_name': 'G'},
+                {'start_time': 50.0, 'end_time': 52.0, 'chord_name': 'D'},
+                {'start_time': 52.0, 'end_time': 54.0, 'chord_name': 'Em'},
+                {'start_time': 54.0, 'end_time': 56.0, 'chord_name': 'C'},
+                {'start_time': 56.0, 'end_time': 58.0, 'chord_name': 'G'},
+                {'start_time': 58.0, 'end_time': 60.0, 'chord_name': 'D'},
+                {'start_time': 60.0, 'end_time': 62.0, 'chord_name': 'Em'},
+                {'start_time': 62.0, 'end_time': 64.0, 'chord_name': 'C'},
+            ]
+        )
+
+        with self.assertLogs('music.structure', level='INFO') as captured_logs:
+            structure = build_musical_structure(chord_events, bpm=60)
+
+        section_chords = [
+            [chord['chord_name'] for chord in measure['chords']]
+            for measure in structure['measures'][12:]
+        ]
+        self.assertEqual(
+            section_chords,
+            [['G', 'D'], ['Em7', 'C'], ['G', 'D'], ['Em7', 'C']],
+        )
+        self.assertIn(
+            'Detected harmonic cycle: length=4',
+            '\n'.join(captured_logs.output),
+        )
+
     def test_mixed_tensions_use_stable_base_triad(self):
         structure = build_musical_structure(
             [
@@ -150,6 +404,7 @@ class MusicalStructureBuilderTests(TestCase):
 
         self.assertEqual(builder.seconds_to_beats(2.1), 2.0)
         self.assertEqual(builder.seconds_to_beats(2.7), 3.0)
+
 
     def test_chordino_label_normalization(self):
         self.assertEqual(normalize_chordino_label('A:min'), 'Am')
@@ -278,6 +533,41 @@ class ProjectReprocessTests(TestCase):
         response = self.client.get(reverse('music:project_status', args=[self.project.pk]))
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['status'], MusicProject.Status.DONE)
+
+    def test_score_edit_page_displays_existing_measures_and_chords(self):
+        Score.objects.create(
+            music_project=self.project,
+            data={
+                'chords': [{'start_time': 0, 'end_time': 2, 'chord_name': 'F'}],
+                'structure': {
+                    'measures': [
+                        {
+                            'number': 1,
+                            'chords': [
+                                {'chord_name': 'F', 'beat_start': 0, 'beat_duration': 4},
+                            ],
+                        },
+                    ],
+                },
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse('music:score_edit', args=[self.project.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Editar partitura')
+        self.assertContains(response, 'scoreVisual')
+        self.assertContains(response, 'scoreMeasuresData')
+        self.assertContains(response, 'data-measure-number')
+
+    def test_score_edit_page_rejects_post_requests(self):
+        Score.objects.create(music_project=self.project, data={})
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse('music:score_edit', args=[self.project.pk]))
+
+        self.assertEqual(response.status_code, 405)
 
     def test_owner_can_stream_original_and_separated_audio(self):
         self.project.audio_file.save(

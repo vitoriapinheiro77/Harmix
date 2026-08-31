@@ -83,7 +83,7 @@
                     {% if score and project.status == 'done' %}
                     <a class="project-button primary" href="{% url 'music:export_pdf' project.pk %}" target="_blank" rel="noopener noreferrer">Exportar PDF</a>
                     {% endif %}
-                    {% if score and score.musicxml_file %}
+                    {% if score %}
                     <a class="project-button ghost" href="{% url 'music:score_edit' project.pk %}">Editar partitura</a>
                     {% endif %}
                 </div>

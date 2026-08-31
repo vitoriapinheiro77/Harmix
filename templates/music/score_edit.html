@@ -1,153 +1,209 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}Editar partitura — {{ project.title }}{% endblock %}
+{% block title %}Editar partitura - {{ project.title }}{% endblock %}
 
 {% block extra_css %}
 <link rel="stylesheet" href="{% static 'css/dashboard.css' %}">
+<style>
+    .score-render-card { overflow: hidden; }
+    .score-sheet {
+        overflow-x: auto;
+        padding: clamp(1rem, 3vw, 2.5rem);
+        background: #f3eee3;
+        border: 1px solid #cfc6b8;
+        border-radius: 0.8rem;
+    }
+    .score-sheet-header {
+        display: grid;
+        grid-template-columns: 1fr minmax(12rem, 2fr) 1fr;
+        align-items: end;
+        gap: 1rem;
+        min-width: 44rem;
+        margin: 0 auto 2rem;
+        color: #1c1a17;
+        font-size: 0.8rem;
+    }
+    .score-sheet-header strong { font-size: 1.65rem; text-align: center; }
+    .score-sheet-header span:last-child { text-align: right; }
+    .score-visual { min-width: 44rem; }
+    .score-system { display: block; width: 100%; min-width: 44rem; margin: 0 0 1.7rem; }
+    .score-staff-line, .score-bar-line, .score-rhythm-slash { stroke: #1c1a17; }
+    .score-staff-line, .score-bar-line { stroke-width: 1.1; }
+    .score-rhythm-slash { stroke-width: 3; stroke-linecap: round; }
+    .score-measure-number { fill: #655f56; font: 11px Georgia, serif; }
+    .score-chord-symbol {
+        fill: #171511;
+        font: 700 18px Georgia, serif;
+    }
+    .score-clef { fill: #171511; font: 49px "Noto Music", "Segoe UI Symbol", serif; }
+    .score-time-signature { fill: #171511; font: 700 18px Georgia, serif; }
+    .score-empty { color: #6f675c; margin-top: 0.6rem; }
+    @media (max-width: 700px) {
+        .score-sheet { padding: 1rem; }
+        .score-sheet-header, .score-visual, .score-system { min-width: 39rem; }
+    }
+</style>
 {% endblock %}
 
 {% block content %}
 <div class="dashboard-shell">
     <aside class="sidebar" aria-label="Menu principal">
-        <a class="sidebar-brand" href="{% url 'home' %}">
-            <span class="brand-mark">H</span>
-            <span>Harmix</span>
-        </a>
-
+        <a class="sidebar-brand" href="{% url 'home' %}"><span class="brand-mark">H</span><span>Harmix</span></a>
         <nav class="sidebar-nav">
-            <a class="nav-item" href="{% url 'home' %}">
-                <span class="nav-icon">D</span>
-                Dashboard
-            </a>
-            <a class="nav-item active" href="{% url 'music:project_list' %}">
-                <span class="nav-icon">M</span>
-                Minhas musicas
-            </a>
-            <a class="nav-item" href="{% url 'music:project_detail' project.pk %}">
-                <span class="nav-icon">P</span>
-                Projeto
-            </a>
+            <a class="nav-item" href="{% url 'home' %}"><span class="nav-icon">D</span>Dashboard</a>
+            <a class="nav-item active" href="{% url 'music:project_list' %}"><span class="nav-icon">M</span>Minhas musicas</a>
+            <a class="nav-item" href="{% url 'music:project_detail' project.pk %}"><span class="nav-icon">P</span>Projeto</a>
         </nav>
     </aside>
 
     <main class="main-panel">
         <header class="topbar">
-            <div>
-                <span class="eyebrow">Editor de partitura</span>
-                <p>{{ project.title }}</p>
-            </div>
-
+            <div><span class="eyebrow">Editor de partitura</span><p>{{ project.title }}</p></div>
             <div class="topbar-actions">
                 <a class="topbar-link" href="{% url 'music:project_detail' project.pk %}">Voltar ao projeto</a>
-                <form method="post" action="{% url 'logout' %}">
-                    {% csrf_token %}
-                    <button type="submit" class="logout-button">Logout</button>
-                </form>
+                <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit" class="logout-button">Logout</button></form>
             </div>
         </header>
 
-        <form class="score-editor" method="post">
-            {% csrf_token %}
-
+        <div class="score-editor">
             <section class="pipeline-card score-editor-hero">
                 <div>
-                    <span class="pill">Revisao musical</span>
+                    <span class="pill">Previa visual</span>
                     <h1>Editar partitura</h1>
-                    <p>
-                        Ajuste o titulo, tom, BPM e os acordes detectados. Ao salvar,
-                        o Harmix gera novamente o PDF e o MusicXML com suas correcoes.
-                    </p>
+                    <p>A visualizacao segue a organizacao da partitura em PDF: quatro compassos por linha, pauta, barras, acordes e slashes ritmicos.</p>
                 </div>
-
-                <div class="score-editor-actions">
-                    <button class="project-button primary" type="submit">Salvar partitura</button>
-                    <a class="project-button ghost" href="{% url 'music:project_detail' project.pk %}">Cancelar</a>
-                </div>
+                <div class="score-editor-actions"><a class="project-button ghost" href="{% url 'music:project_detail' project.pk %}">Voltar ao projeto</a></div>
             </section>
 
-            <section class="pipeline-card">
-                <div class="score-meta-grid">
-                    <label>
-                        <span>Titulo</span>
-                        <input type="text" name="title" value="{{ score_data.title|default:project.title }}" maxlength="255">
-                    </label>
-                    <label>
-                        <span>Artista</span>
-                        <input type="text" name="artist" value="{{ score_data.artist|default:'nome do cantor' }}" maxlength="255">
-                    </label>
-                    <label>
-                        <span>Tom</span>
-                        <input type="text" name="key" value="{{ score_data.key|default:project.key }}" placeholder="Ex: Dm">
-                    </label>
-                    <label>
-                        <span>BPM</span>
-                        <input type="number" name="bpm" value="{{ score_data.bpm|default:project.bpm }}" min="1" max="300">
-                    </label>
-                </div>
-            </section>
-
-            <section class="pipeline-card">
-                <div class="section-heading compact">
-                    <span class="eyebrow">Mapa de acordes</span>
-                    <h2>Acordes detectados</h2>
-                </div>
-
-                {% if chords %}
-                <div class="score-chord-table" aria-label="Acordes editaveis">
-                    <div class="score-chord-head">
-                        <span>Inicio</span>
-                        <span>Fim</span>
-                        <span>Acorde</span>
+            <section class="pipeline-card score-render-card">
+                <div class="section-heading compact"><span class="eyebrow">Partitura visual</span><h2>{{ project.title }}</h2></div>
+                {% if score_data.structure.measures %}
+                <div class="score-sheet">
+                    <div class="score-sheet-header">
+                        <span>Tom: {{ score_data.key|default:project.key|default:"-" }} &nbsp; BPM: {{ score_data.bpm|default:project.bpm|default:"-" }}</span>
+                        <strong>{{ score_data.title|default:project.title }}</strong>
+                        <span>{{ score_data.artist|default:"Harmix" }}</span>
                     </div>
-
-                    {% for chord in chords %}
-                    <div class="score-chord-row">
-                        <input type="number" name="start_time" value="{{ chord.start_time }}" step="0.01" min="0">
-                        <input type="number" name="end_time" value="{{ chord.end_time }}" step="0.01" min="0">
-                        <input type="text" name="chord_name" value="{{ chord.chord_name }}" placeholder="Ex: Dm">
-                    </div>
-                    {% endfor %}
+                    <div id="scoreVisual" class="score-visual" aria-label="Partitura em SVG"></div>
                 </div>
+                {{ score_data.structure.measures|json_script:"scoreMeasuresData" }}
                 {% else %}
-                <div class="empty-state">
-                    <span class="feature-icon">CH</span>
-                    <h3>Nenhum acorde encontrado</h3>
-                    <p>Quando o pipeline encontrar acordes, eles aparecerao aqui para revisao.</p>
-                </div>
+                <div class="empty-state"><span class="feature-icon">M</span><h3>Compassos indisponiveis</h3><p>Processe a musica para gerar a partitura visual.</p></div>
                 {% endif %}
             </section>
-
-            {% if score_data.structure.measures %}
-            <section class="pipeline-card">
-                <div class="section-heading compact">
-                    <span class="eyebrow">Estrutura musical</span>
-                    <h2>Previa por compassos</h2>
-                </div>
-
-                <div class="measure-grid">
-                    {% for measure in score_data.structure.measures %}
-                    <article class="measure-card">
-                        <span class="measure-number">Compasso {{ measure.number }}</span>
-                        <div class="measure-chords">
-                            {% for chord in measure.chords %}
-                            <div class="measure-chord">
-                                <strong>{{ chord.chord_name }}</strong>
-                                <span>beat {{ chord.beat_start }} · {{ chord.beat_duration }} tempos</span>
-                            </div>
-                            {% empty %}
-                            <div class="measure-chord muted">
-                                <strong>N.C.</strong>
-                                <span>sem acorde detectado</span>
-                            </div>
-                            {% endfor %}
-                        </div>
-                    </article>
-                    {% endfor %}
-                </div>
-            </section>
-            {% endif %}
-        </form>
+        </div>
     </main>
 </div>
+
+{% if score_data.structure.measures %}
+<script>
+    (function () {
+        const svgNamespace = 'http://www.w3.org/2000/svg';
+        const measuresElement = document.getElementById('scoreMeasuresData');
+        const visual = document.getElementById('scoreVisual');
+        const measures = JSON.parse(measuresElement.textContent || '[]');
+        const beatsPerMeasure = 4;
+        const measuresPerSystem = 4;
+
+        function svgElement(name, attributes) {
+            const element = document.createElementNS(svgNamespace, name);
+            Object.entries(attributes || {}).forEach(function ([key, value]) {
+                element.setAttribute(key, value);
+            });
+            return element;
+        }
+
+        function addText(svg, text, x, y, className, extraAttributes) {
+            const element = svgElement('text', Object.assign({ x: x, y: y, class: className }, extraAttributes));
+            element.textContent = text;
+            svg.appendChild(element);
+            return element;
+        }
+
+        function clamp(value, minimum, maximum) {
+            return Math.max(minimum, Math.min(value, maximum));
+        }
+
+        function renderSystem(systemMeasures, systemIndex) {
+            const width = 1200;
+            const height = 154;
+            const left = 38;
+            const right = 24;
+            const staffTop = 68;
+            const lineGap = 12;
+            const staffBottom = staffTop + (lineGap * 4);
+            const usableWidth = width - left - right;
+            const measureWidth = usableWidth / systemMeasures.length;
+            const svg = svgElement('svg', {
+                class: 'score-system', viewBox: '0 0 ' + width + ' ' + height,
+                role: 'img', 'aria-label': 'Linha ' + (systemIndex + 1) + ' da partitura',
+            });
+
+            for (let line = 0; line < 5; line += 1) {
+                svg.appendChild(svgElement('line', {
+                    x1: left, y1: staffTop + (line * lineGap),
+                    x2: width - right, y2: staffTop + (line * lineGap), class: 'score-staff-line',
+                }));
+            }
+            for (let bar = 0; bar <= systemMeasures.length; bar += 1) {
+                const barX = left + (bar * measureWidth);
+                svg.appendChild(svgElement('line', {
+                    x1: barX, y1: staffTop, x2: barX, y2: staffBottom, class: 'score-bar-line',
+                }));
+            }
+
+            let firstMeasurePadding = 32;
+            if (systemIndex === 0) {
+                addText(svg, String.fromCodePoint(0x1D11E), left + 8, staffTop + 43, 'score-clef');
+                addText(svg, '4', left + 52, staffTop + 22, 'score-time-signature', { 'text-anchor': 'middle' });
+                addText(svg, '4', left + 52, staffTop + 45, 'score-time-signature', { 'text-anchor': 'middle' });
+                firstMeasurePadding = 72;
+            } else {
+                addText(svg, String.fromCodePoint(0x1D11E), left + 8, staffTop + 43, 'score-clef');
+                firstMeasurePadding = 46;
+            }
+
+            systemMeasures.forEach(function (measure, measureIndex) {
+                const measureX = left + (measureIndex * measureWidth);
+                const padding = measureIndex === 0 ? firstMeasurePadding : 8;
+                const playLeft = measureX + padding;
+                const playRight = measureX + measureWidth - 8;
+                const playWidth = Math.max(playRight - playLeft, 36);
+                const chords = measure.chords && measure.chords.length ? measure.chords : [{ chord_name: 'N.C.', beat_start: 0, beat_duration: 4 }];
+
+                addText(svg, String(measure.number || ''), measureX + 6, staffTop - 6, 'score-measure-number');
+                chords.forEach(function (chord, chordIndex) {
+                    const start = clamp(Number(chord.beat_start || 0), 0, beatsPerMeasure);
+                    const duration = Math.max(0, Number(chord.beat_duration || beatsPerMeasure));
+                    const end = clamp(start + duration, start + 0.1, beatsPerMeasure);
+                    const center = start + ((end - start) / 2);
+                    const chordX = playLeft + ((center / beatsPerMeasure) * playWidth);
+                    const symbol = addText(svg, chord.chord_name || 'N.C.', chordX, staffTop - 17, 'score-chord-symbol', {
+                        'text-anchor': 'middle',
+                        'data-measure-number': measure.number || '',
+                        'data-chord-index': chordIndex,
+                    });
+                    symbol.setAttribute('data-beat-start', start);
+                });
+                for (let beat = 0; beat < beatsPerMeasure; beat += 1) {
+                    const slashX = playLeft + (((beat + 0.5) / beatsPerMeasure) * playWidth);
+                    svg.appendChild(svgElement('line', {
+                        x1: slashX - 5, y1: staffTop + 33, x2: slashX + 5, y2: staffTop + 21, class: 'score-rhythm-slash',
+                    }));
+                }
+            });
+            visual.appendChild(svg);
+        }
+
+        if (!Array.isArray(measures) || !measures.length) {
+            visual.innerHTML = '<p class="score-empty">Nenhum compasso disponivel.</p>';
+            return;
+        }
+        for (let index = 0; index < measures.length; index += measuresPerSystem) {
+            renderSystem(measures.slice(index, index + measuresPerSystem), index / measuresPerSystem);
+        }
+    })();
+</script>
+{% endif %}
 {% endblock %}

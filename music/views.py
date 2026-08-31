@@ -4,16 +4,14 @@ from io import BytesIO
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.core.files.base import ContentFile
 from django.db import transaction
 from django.http import FileResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_GET, require_POST
 
 from .forms import MusicProjectUploadForm
 from .models import MusicProject, Score
-from .structure import build_musical_structure
-from .utils import PDF_DEFAULT_ARTIST, delete_project_files, enqueue_project_reprocessing, regenerate_score_pdf
+from .utils import delete_project_files, enqueue_project_reprocessing, regenerate_score_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +130,7 @@ def export_pdf_view(request, pk):
 
 
 @login_required
+@require_GET
 def score_edit_view(request, pk):
     project = get_object_or_404(
         MusicProject.objects.select_related('score'),
@@ -144,83 +143,14 @@ def score_edit_view(request, pk):
         messages.error(request, 'A partitura ainda nao foi gerada para este projeto.')
         return redirect('music:project_detail', pk=project.pk)
 
-    score_data = score.data or {}
-
-    if request.method == 'POST':
-        title = request.POST.get('title', '').strip() or project.title
-        artist = request.POST.get('artist', '').strip() or PDF_DEFAULT_ARTIST
-        key = request.POST.get('key', '').strip()
-        bpm_raw = request.POST.get('bpm', '').strip()
-        starts = request.POST.getlist('start_time')
-        ends = request.POST.getlist('end_time')
-        names = request.POST.getlist('chord_name')
-
-        chords = []
-        for start, end, name in zip(starts, ends, names):
-            name = name.strip()
-            if not name:
-                continue
-            try:
-                start_time = round(float(start), 2)
-                end_time = round(float(end), 2)
-            except ValueError:
-                continue
-            if end_time <= start_time:
-                continue
-            chords.append(
-                {
-                    'start_time': start_time,
-                    'end_time': end_time,
-                    'chord_name': name,
-                }
-            )
-
-        try:
-            bpm = int(bpm_raw) if bpm_raw else None
-        except ValueError:
-            bpm = project.bpm
-
-        updated_data = {
-            'title': title,
-            'artist': artist,
-            'key': key,
-            'bpm': bpm,
-            'chords': chords,
-            'structure': build_musical_structure(chords, bpm) if bpm else {},
-        }
-
-        from .pipeline import HarmixPipeline
-
-        pipeline = HarmixPipeline(project)
-        musicxml = pipeline._make_musicxml(updated_data)
-        pdf_bytes = pipeline._make_pdf(updated_data)
-
-        score.data = updated_data
-        score.musicxml_file.save(
-            f'project_{project.pk}.musicxml',
-            ContentFile(musicxml.encode('utf-8')),
-            save=False,
-        )
-        score.pdf_file.save(f'project_{project.pk}.pdf', ContentFile(pdf_bytes), save=False)
-        score.save()
-
-        project.title = title
-        project.artist = artist
-        project.key = key
-        project.bpm = bpm
-        project.save(update_fields=['title', 'artist', 'key', 'bpm', 'updated_at'])
-
-        messages.success(request, 'Partitura atualizada. PDF e MusicXML foram regenerados.')
-        return redirect('music:project_detail', pk=project.pk)
-
     return render(
         request,
         'music/score_edit.html',
         {
             'project': project,
             'score': score,
-            'score_data': score_data,
-            'chords': score_data.get('chords', []),
+            'score_data': score.data or {},
+            'chords': (score.data or {}).get('chords', []),
         },
     )
 
