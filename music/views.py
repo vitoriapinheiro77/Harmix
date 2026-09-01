@@ -1,5 +1,8 @@
 import logging
 import mimetypes
+import json
+import re
+from copy import deepcopy
 from io import BytesIO
 
 from django.contrib import messages
@@ -14,6 +17,8 @@ from .models import MusicProject, Score
 from .utils import delete_project_files, enqueue_project_reprocessing, regenerate_score_pdf
 
 logger = logging.getLogger(__name__)
+
+CHORD_NAME_PATTERN = re.compile(r'^(?:[A-G](?:#|b)?[A-Za-z0-9+#()/.-]*|N\.C\.)$')
 
 
 @login_required
@@ -143,16 +148,104 @@ def score_edit_view(request, pk):
         messages.error(request, 'A partitura ainda nao foi gerada para este projeto.')
         return redirect('music:project_detail', pk=project.pk)
 
+    score_data = _score_data_with_manual_chord_edits(score)
     return render(
         request,
         'music/score_edit.html',
         {
             'project': project,
             'score': score,
-            'score_data': score.data or {},
-            'chords': (score.data or {}).get('chords', []),
+            'score_data': score_data,
+            'chords': score_data.get('chords', []),
         },
     )
+
+
+def _score_data_with_manual_chord_edits(score):
+    """Overlay manual chord labels without changing the detected score data."""
+    score_data = deepcopy(score.data or {})
+    edits = (score.manual_chord_edits or {}).get('chords', {})
+    if not isinstance(edits, dict):
+        edits = {}
+
+    for measure in score_data.get('structure', {}).get('measures', []):
+        measure_number = measure.get('number')
+        for chord_index, chord in enumerate(measure.get('chords') or []):
+            detected_name = chord.get('chord_name') or 'N.C.'
+            chord['_detected_chord_name'] = detected_name
+            edit = edits.get(f'{measure_number}:{chord_index}')
+            if isinstance(edit, dict) and isinstance(edit.get('chord_name'), str):
+                chord['chord_name'] = edit['chord_name']
+                chord['_is_manually_edited'] = True
+    return score_data
+
+
+def _detected_chord_lookup(score):
+    lookup = {}
+    for measure in (score.data or {}).get('structure', {}).get('measures', []):
+        measure_number = measure.get('number')
+        if not isinstance(measure_number, int):
+            continue
+        for chord_index, chord in enumerate(measure.get('chords') or []):
+            lookup[(measure_number, chord_index)] = chord.get('chord_name') or 'N.C.'
+    return lookup
+
+
+@login_required
+@require_POST
+def score_chord_edits_view(request, pk):
+    project = get_object_or_404(
+        MusicProject.objects.select_related('score'),
+        pk=pk,
+        user=request.user,
+    )
+    try:
+        score = project.score
+    except Score.DoesNotExist:
+        return JsonResponse({'error': 'Partitura nao encontrada.'}, status=404)
+
+    try:
+        payload = json.loads(request.body)
+    except (TypeError, ValueError):
+        return JsonResponse({'error': 'Corpo JSON invalido.'}, status=400)
+    changes = payload.get('changes') if isinstance(payload, dict) else None
+    if not isinstance(changes, list) or len(changes) > 100:
+        return JsonResponse({'error': 'Lista de alteracoes invalida.'}, status=400)
+
+    detected_chords = _detected_chord_lookup(score)
+    validated_changes = []
+    for change in changes:
+        if not isinstance(change, dict):
+            return JsonResponse({'error': 'Alteracao de acorde invalida.'}, status=400)
+        measure_number = change.get('measure_number')
+        chord_index = change.get('chord_index')
+        chord_name = change.get('chord_name')
+        if (
+            isinstance(measure_number, bool)
+            or not isinstance(measure_number, int)
+            or isinstance(chord_index, bool)
+            or not isinstance(chord_index, int)
+            or (measure_number, chord_index) not in detected_chords
+            or not isinstance(chord_name, str)
+        ):
+            return JsonResponse({'error': 'Compasso ou acorde invalido.'}, status=400)
+        chord_name = chord_name.strip()
+        if not chord_name or len(chord_name) > 20 or not CHORD_NAME_PATTERN.fullmatch(chord_name):
+            return JsonResponse({'error': 'Nome de acorde invalido.'}, status=400)
+        validated_changes.append((measure_number, chord_index, chord_name))
+
+    manual_edits = dict(score.manual_chord_edits or {})
+    chord_edits = dict(manual_edits.get('chords') or {})
+    for measure_number, chord_index, chord_name in validated_changes:
+        key = f'{measure_number}:{chord_index}'
+        if chord_name == detected_chords[(measure_number, chord_index)]:
+            chord_edits.pop(key, None)
+        else:
+            chord_edits[key] = {'chord_name': chord_name}
+    manual_edits['chords'] = chord_edits
+    score.manual_chord_edits = manual_edits
+    score.save(update_fields=['manual_chord_edits'])
+    return JsonResponse({'saved_changes': len(validated_changes)})
 
 
 @login_required

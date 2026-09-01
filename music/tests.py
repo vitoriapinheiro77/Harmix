@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock, patch
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -14,7 +15,7 @@ from .models import MusicProject, Score, Track
 from .pipeline import HarmixPipeline
 from .separation import SeparationError, run_demucs, select_chord_source
 from .structure import MusicalStructureBuilder, build_musical_structure
-from .utils import enqueue_project_reprocessing
+from .utils import enqueue_project_reprocessing, pdf_score_data
 
 
 class _ChordChangeStub:
@@ -560,6 +561,77 @@ class ProjectReprocessTests(TestCase):
         self.assertContains(response, 'scoreVisual')
         self.assertContains(response, 'scoreMeasuresData')
         self.assertContains(response, 'data-measure-number')
+        self.assertContains(response, 'Exportar PDF')
+        self.assertContains(response, reverse('music:export_pdf', args=[self.project.pk]))
+
+    def test_pdf_score_data_applies_manual_chords_without_mutating_detected_data(self):
+        score = Score.objects.create(
+            music_project=self.project,
+            data={
+                'structure': {
+                    'measures': [
+                        {
+                            'number': 1,
+                            'chords': [{'chord_name': 'F', 'beat_start': 0, 'beat_duration': 4}],
+                        },
+                    ],
+                },
+            },
+            manual_chord_edits={'chords': {'1:0': {'chord_name': 'Am7'}}},
+        )
+
+        rendered_data = pdf_score_data(self.project, score)
+
+        self.assertEqual(
+            rendered_data['structure']['measures'][0]['chords'][0]['chord_name'],
+            'Am7',
+        )
+        self.assertEqual(
+            score.data['structure']['measures'][0]['chords'][0]['chord_name'],
+            'F',
+        )
+
+    @patch('music.views._try_regenerate_pdf')
+    def test_project_page_keeps_existing_export_pdf_button(self, mock_regenerate):
+        Score.objects.create(
+            music_project=self.project,
+            data={'structure': {'measures': [{'number': 1, 'chords': [{'chord_name': 'F'}]}]}},
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse('music:project_detail', args=[self.project.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Exportar PDF')
+        self.assertContains(response, reverse('music:export_pdf', args=[self.project.pk]))
+
+    @patch.object(HarmixPipeline, '_make_pdf', return_value=b'%PDF-1.4 corrected')
+    def test_exported_pdf_receives_manually_corrected_chord(self, mock_make_pdf):
+        Score.objects.create(
+            music_project=self.project,
+            data={
+                'structure': {
+                    'measures': [
+                        {
+                            'number': 1,
+                            'chords': [{'chord_name': 'F', 'beat_start': 0, 'beat_duration': 4}],
+                        },
+                    ],
+                },
+            },
+            manual_chord_edits={'chords': {'1:0': {'chord_name': 'Am7'}}},
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse('music:export_pdf', args=[self.project.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/pdf')
+        rendered_data = mock_make_pdf.call_args.args[0]
+        self.assertEqual(
+            rendered_data['structure']['measures'][0]['chords'][0]['chord_name'],
+            'Am7',
+        )
 
     def test_score_edit_page_rejects_post_requests(self):
         Score.objects.create(music_project=self.project, data={})
@@ -568,6 +640,69 @@ class ProjectReprocessTests(TestCase):
         response = self.client.post(reverse('music:score_edit', args=[self.project.pk]))
 
         self.assertEqual(response.status_code, 405)
+
+    def test_owner_can_save_manual_chord_edit_without_changing_detected_score(self):
+        score = Score.objects.create(
+            music_project=self.project,
+            data={
+                'structure': {
+                    'measures': [
+                        {
+                            'number': 1,
+                            'chords': [{'chord_name': 'F', 'beat_start': 0, 'beat_duration': 4}],
+                        },
+                    ],
+                },
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse('music:score_chord_edits', args=[self.project.pk]),
+            data=json.dumps({'changes': [{'measure_number': 1, 'chord_index': 0, 'chord_name': 'Am7'}]}),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        score.refresh_from_db()
+        self.assertEqual(score.data['structure']['measures'][0]['chords'][0]['chord_name'], 'F')
+        self.assertEqual(score.manual_chord_edits['chords']['1:0']['chord_name'], 'Am7')
+        response = self.client.get(reverse('music:score_edit', args=[self.project.pk]))
+        self.assertContains(response, 'Am7')
+
+    def test_manual_chord_edit_requires_valid_owned_chord(self):
+        Score.objects.create(
+            music_project=self.project,
+            data={'structure': {'measures': [{'number': 1, 'chords': [{'chord_name': 'F'}]}]}},
+        )
+        other_user = get_user_model().objects.create_user(
+            email='other-score@harmix.test',
+            password='test-pass-123',
+        )
+        self.client.force_login(other_user)
+
+        response = self.client.post(
+            reverse('music:score_chord_edits', args=[self.project.pk]),
+            data=json.dumps({'changes': [{'measure_number': 1, 'chord_index': 0, 'chord_name': 'Invalid chord'}]}),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_manual_chord_edit_rejects_invalid_name(self):
+        Score.objects.create(
+            music_project=self.project,
+            data={'structure': {'measures': [{'number': 1, 'chords': [{'chord_name': 'F'}]}]}},
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse('music:score_chord_edits', args=[self.project.pk]),
+            data=json.dumps({'changes': [{'measure_number': 1, 'chord_index': 0, 'chord_name': 'invalid chord'}]}),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 400)
 
     def test_owner_can_stream_original_and_separated_audio(self):
         self.project.audio_file.save(

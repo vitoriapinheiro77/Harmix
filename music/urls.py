@@ -15,4 +15,5 @@ urlpatterns = [
     path('projects/<int:pk>/export-pdf/', views.export_pdf_view, name='export_pdf'),
     path('projects/<int:pk>/delete/', views.project_delete_view, name='project_delete'),
     path('projects/<int:pk>/score/edit/', views.score_edit_view, name='score_edit'),
+    path('projects/<int:pk>/score/chord-edits/', views.score_chord_edits_view, name='score_chord_edits'),
 ]

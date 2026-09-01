@@ -62,6 +62,7 @@ class ChordSegment(models.Model):
 class Score(models.Model):
     music_project = models.OneToOneField(MusicProject, on_delete=models.CASCADE, related_name='score')
     data = models.JSONField(default=dict)
+    manual_chord_edits = models.JSONField(default=dict, blank=True)
     musicxml_file = models.FileField(upload_to='scores/musicxml/', blank=True)
     pdf_file = models.FileField(upload_to='scores/pdf/', blank=True)
 

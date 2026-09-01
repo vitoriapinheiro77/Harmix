@@ -35,10 +35,47 @@
     .score-chord-symbol {
         fill: #171511;
         font: 700 18px Georgia, serif;
+        cursor: pointer;
+        transition: fill 120ms ease, filter 120ms ease;
     }
+    .score-chord-symbol.is-manual { fill: #1f6d55; }
+    .score-chord-symbol:hover, .score-chord-symbol:focus, .score-chord-symbol.is-selected { fill: #9c3d20; filter: drop-shadow(0 1px 0 #fff); outline: none; }
+    .score-chord-symbol.is-selected { text-decoration: underline; }
     .score-clef { fill: #171511; font: 49px "Noto Music", "Segoe UI Symbol", serif; }
     .score-time-signature { fill: #171511; font: 700 18px Georgia, serif; }
     .score-empty { color: #6f675c; margin-top: 0.6rem; }
+    .score-sheet { position: relative; }
+    .chord-editor-popover {
+        position: absolute;
+        z-index: 3;
+        display: flex;
+        gap: 0.35rem;
+        padding: 0.35rem;
+        background: #201d18;
+        border: 1px solid #9c3d20;
+        border-radius: 0.4rem;
+        box-shadow: 0 10px 24px rgba(23, 21, 17, 0.25);
+    }
+    .chord-editor-popover input { width: 5rem; padding: 0.35rem; border: 0; border-radius: 0.2rem; color: #171511; background: #fffdf8; }
+    .chord-editor-popover button { padding: 0.35rem 0.55rem; border: 0; border-radius: 0.2rem; color: #fff; background: #9c3d20; font-weight: 700; cursor: pointer; }
+    .score-save-status {
+        flex-basis: 100%;
+        margin: 0;
+        padding: 0.55rem 0.75rem;
+        border: 1px solid rgba(45, 212, 191, 0.45);
+        border-radius: 0.45rem;
+        color: #ccfbf1;
+        background: rgba(20, 83, 75, 0.45);
+        font-size: 0.9rem;
+        font-weight: 700;
+    }
+    .score-save-status:empty { display: none; }
+    .score-save-status.is-error { border-color: rgba(251, 113, 133, 0.6); color: #fecdd3; background: rgba(136, 19, 55, 0.38); }
+    .score-editor-actions .project-button.is-disabled {
+        pointer-events: none;
+        opacity: 0.45;
+        transform: none;
+    }
     @media (max-width: 700px) {
         .score-sheet { padding: 1rem; }
         .score-sheet-header, .score-visual, .score-system { min-width: 39rem; }
@@ -73,7 +110,12 @@
                     <h1>Editar partitura</h1>
                     <p>A visualizacao segue a organizacao da partitura em PDF: quatro compassos por linha, pauta, barras, acordes e slashes ritmicos.</p>
                 </div>
-                <div class="score-editor-actions"><a class="project-button ghost" href="{% url 'music:project_detail' project.pk %}">Voltar ao projeto</a></div>
+                <div class="score-editor-actions">
+                    <button id="saveChordChanges" class="project-button primary" type="button" disabled>Salvar altera&ccedil;&otilde;es</button>
+                    <a id="exportScorePdf" class="project-button ghost" href="{% url 'music:export_pdf' project.pk %}" target="_blank" rel="noopener noreferrer">Exportar PDF</a>
+                    <a class="project-button ghost" href="{% url 'music:project_detail' project.pk %}">Voltar ao projeto</a>
+                    <p id="scoreSaveStatus" class="score-save-status" role="status" aria-live="polite"></p>
+                </div>
             </section>
 
             <section class="pipeline-card score-render-card">
@@ -105,6 +147,15 @@
         const measures = JSON.parse(measuresElement.textContent || '[]');
         const beatsPerMeasure = 4;
         const measuresPerSystem = 4;
+        const sheet = document.querySelector('.score-sheet');
+        const saveButton = document.getElementById('saveChordChanges');
+        const exportButton = document.getElementById('exportScorePdf');
+        const saveStatus = document.getElementById('scoreSaveStatus');
+        const saveButtonLabel = 'Salvar altera\u00e7\u00f5es';
+        const pendingChanges = new Map();
+        let selectedSymbol = null;
+        let editor = null;
+        let statusTimeout = null;
 
         function svgElement(name, attributes) {
             const element = document.createElementNS(svgNamespace, name);
@@ -124,6 +175,162 @@
         function clamp(value, minimum, maximum) {
             return Math.max(minimum, Math.min(value, maximum));
         }
+
+        function changeKey(symbol) {
+            return symbol.dataset.measureNumber + ':' + symbol.dataset.chordIndex;
+        }
+
+        function setSaveStatus(message, isError, clearAfter) {
+            window.clearTimeout(statusTimeout);
+            saveStatus.textContent = message;
+            saveStatus.classList.toggle('is-error', Boolean(isError));
+            if (clearAfter) {
+                statusTimeout = window.setTimeout(function () {
+                    saveStatus.textContent = '';
+                    saveStatus.classList.remove('is-error');
+                }, clearAfter);
+            }
+        }
+
+        function updateSaveButton(showPendingStatus) {
+            const hasPendingChanges = pendingChanges.size > 0;
+            saveButton.disabled = !hasPendingChanges;
+            saveButton.textContent = saveButtonLabel;
+            saveButton.removeAttribute('aria-busy');
+            exportButton.classList.toggle('is-disabled', hasPendingChanges);
+            exportButton.setAttribute('aria-disabled', hasPendingChanges ? 'true' : 'false');
+            if (hasPendingChanges) {
+                exportButton.setAttribute('tabindex', '-1');
+            } else {
+                exportButton.removeAttribute('tabindex');
+            }
+            if (showPendingStatus) {
+                setSaveStatus(
+                    pendingChanges.size ? pendingChanges.size + ' alteracao(oes) pendente(s).' : '',
+                    false,
+                );
+            }
+        }
+
+        function closeEditor() {
+            if (editor) {
+                editor.remove();
+                editor = null;
+            }
+        }
+
+        function selectChord(symbol) {
+            if (selectedSymbol) {
+                selectedSymbol.classList.remove('is-selected');
+            }
+            selectedSymbol = symbol;
+            symbol.classList.add('is-selected');
+        }
+
+        function commitChord(symbol, input) {
+            const chordName = input.value.trim();
+            const validChord = /^(?:[A-G](?:#|b)?[A-Za-z0-9+#()/.-]*|N\.C\.)$/;
+            if (!chordName || chordName.length > 20 || !validChord.test(chordName)) {
+                input.setCustomValidity('Informe um acorde valido, como Am7 ou G/B.');
+                input.reportValidity();
+                return;
+            }
+            input.setCustomValidity('');
+            symbol.textContent = chordName;
+            const key = changeKey(symbol);
+            const isOriginal = chordName === symbol.dataset.detectedChord;
+            if (isOriginal && symbol.dataset.manual !== 'true') {
+                pendingChanges.delete(key);
+            } else {
+                pendingChanges.set(key, {
+                    measure_number: Number(symbol.dataset.measureNumber),
+                    chord_index: Number(symbol.dataset.chordIndex),
+                    chord_name: chordName,
+                });
+            }
+            symbol.classList.toggle('is-manual', !isOriginal || symbol.dataset.manual === 'true');
+            closeEditor();
+            updateSaveButton(true);
+        }
+
+        function openEditor(symbol) {
+            selectChord(symbol);
+            closeEditor();
+            const bounds = symbol.getBoundingClientRect();
+            const sheetBounds = sheet.getBoundingClientRect();
+            editor = document.createElement('form');
+            editor.className = 'chord-editor-popover';
+            editor.style.left = (bounds.left - sheetBounds.left + sheet.scrollLeft) + 'px';
+            editor.style.top = (bounds.bottom - sheetBounds.top + sheet.scrollTop + 6) + 'px';
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.maxLength = 20;
+            input.value = symbol.textContent;
+            input.setAttribute('aria-label', 'Novo acorde');
+            const confirm = document.createElement('button');
+            confirm.type = 'submit';
+            confirm.textContent = 'OK';
+            editor.append(input, confirm);
+            editor.addEventListener('submit', function (event) {
+                event.preventDefault();
+                commitChord(symbol, input);
+            });
+            input.addEventListener('keydown', function (event) {
+                if (event.key === 'Escape') {
+                    closeEditor();
+                    symbol.focus();
+                }
+            });
+            sheet.appendChild(editor);
+            input.focus();
+            input.select();
+        }
+
+        function csrfToken() {
+            const tokenInput = document.querySelector('input[name="csrfmiddlewaretoken"]');
+            if (tokenInput && tokenInput.value) {
+                return tokenInput.value;
+            }
+            const match = document.cookie.match(/(?:^|; )csrftoken=([^;]+)/);
+            return match ? decodeURIComponent(match[1]) : '';
+        }
+
+        saveButton.addEventListener('click', async function () {
+            if (!pendingChanges.size) {
+                return;
+            }
+            saveButton.disabled = true;
+            saveButton.textContent = 'Salvando...';
+            saveButton.setAttribute('aria-busy', 'true');
+            setSaveStatus('Salvando altera\u00e7\u00f5es...', false);
+            try {
+                const response = await fetch('{% url "music:score_chord_edits" project.pk %}', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': csrfToken(),
+                    },
+                    body: JSON.stringify({ changes: Array.from(pendingChanges.values()) }),
+                });
+                const result = await response.json().catch(function () { return {}; });
+                if (!response.ok) {
+                    throw new Error(result.error || 'Nao foi possivel salvar as alteracoes.');
+                }
+                pendingChanges.forEach(function (change) {
+                    const symbol = document.querySelector('[data-measure-number="' + change.measure_number + '"][data-chord-index="' + change.chord_index + '"]');
+                    if (symbol) {
+                        symbol.dataset.manual = symbol.textContent !== symbol.dataset.detectedChord ? 'true' : 'false';
+                        symbol.classList.toggle('is-manual', symbol.dataset.manual === 'true');
+                    }
+                });
+                pendingChanges.clear();
+                setSaveStatus('Altera\u00e7\u00f5es salvas.', false, 5000);
+            } catch (error) {
+                setSaveStatus(error.message || 'N\u00e3o foi poss\u00edvel salvar as altera\u00e7\u00f5es.', true);
+            }
+            updateSaveButton();
+        });
 
         function renderSystem(systemMeasures, systemIndex) {
             const width = 1200;
@@ -185,6 +392,18 @@
                         'data-chord-index': chordIndex,
                     });
                     symbol.setAttribute('data-beat-start', start);
+                    symbol.dataset.detectedChord = chord._detected_chord_name || chord.chord_name || 'N.C.';
+                    symbol.dataset.manual = chord._is_manually_edited ? 'true' : 'false';
+                    symbol.classList.toggle('is-manual', symbol.dataset.manual === 'true');
+                    symbol.setAttribute('role', 'button');
+                    symbol.setAttribute('tabindex', '0');
+                    symbol.addEventListener('click', function () { openEditor(symbol); });
+                    symbol.addEventListener('keydown', function (event) {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            openEditor(symbol);
+                        }
+                    });
                 });
                 for (let beat = 0; beat < beatsPerMeasure; beat += 1) {
                     const slashX = playLeft + (((beat + 0.5) / beatsPerMeasure) * playWidth);

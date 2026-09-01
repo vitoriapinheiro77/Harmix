@@ -1,6 +1,7 @@
 import logging
 import shutil
 import tempfile
+from copy import deepcopy
 from pathlib import Path
 
 from django.core.exceptions import ObjectDoesNotExist
@@ -90,7 +91,15 @@ def enqueue_project_reprocessing(project):
 
 
 def pdf_score_data(project, score):
-    score_data = dict(score.data or {})
+    score_data = deepcopy(score.data or {})
+    manual_chord_edits = (score.manual_chord_edits or {}).get('chords', {})
+    if isinstance(manual_chord_edits, dict):
+        for measure in score_data.get('structure', {}).get('measures', []):
+            measure_number = measure.get('number')
+            for chord_index, chord in enumerate(measure.get('chords') or []):
+                edit = manual_chord_edits.get(f'{measure_number}:{chord_index}')
+                if isinstance(edit, dict) and isinstance(edit.get('chord_name'), str):
+                    chord['chord_name'] = edit['chord_name']
     artist = (score_data.get('artist') or '').strip()
     score_data['artist'] = artist or PDF_DEFAULT_ARTIST
     return score_data
