@@ -1,8 +1,8 @@
 import logging
+import math
 import mimetypes
 import json
 import re
-from copy import deepcopy
 from io import BytesIO
 
 from django.contrib import messages
@@ -14,11 +14,44 @@ from django.views.decorators.http import require_GET, require_POST
 
 from .forms import MusicProjectUploadForm
 from .models import MusicProject, Score
-from .utils import delete_project_files, enqueue_project_reprocessing, regenerate_score_pdf
+from .utils import (
+    delete_project_files,
+    enqueue_project_reprocessing,
+    regenerate_score_pdf,
+    score_data_with_manual_chord_edits,
+)
 
 logger = logging.getLogger(__name__)
 
-CHORD_NAME_PATTERN = re.compile(r'^(?:[A-G](?:#|b)?[A-Za-z0-9+#()/.-]*|N\.C\.)$')
+CHORD_NAME_PATTERN = re.compile(
+    r'^(?:N\.C\.|[A-G](?:#|b)?'
+    r'(?:(?:(?:maj|min|m|dim|aug|add)?(?:[0-9]{1,2}|6/9)?|(?:[0-9]{1,2})?sus(?:2|4)?))?'
+    r'(?:\((?:[#b]?(?:5|9|11|13))(?:,[#b]?(?:5|9|11|13))*\))?'
+    r'(?:/[A-G](?:#|b)?)?)$'
+)
+
+
+def _normalized_manual_beat_start(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    normalized = float(value)
+    if not math.isfinite(normalized) or not 0 <= normalized <= 4:
+        return None
+    return normalized
+
+
+def _normalized_manual_position_ratio(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    normalized = float(value)
+    if not math.isfinite(normalized) or not 0 <= normalized <= 1:
+        return None
+    return normalized
+
+
+def _manual_added_chord_id(measure_number, beat_start):
+    identifier_beat = int(beat_start) if float(beat_start).is_integer() else beat_start
+    return f'{measure_number}:{identifier_beat}'
 
 
 @login_required
@@ -148,7 +181,7 @@ def score_edit_view(request, pk):
         messages.error(request, 'A partitura ainda nao foi gerada para este projeto.')
         return redirect('music:project_detail', pk=project.pk)
 
-    score_data = _score_data_with_manual_chord_edits(score)
+    score_data = score_data_with_manual_chord_edits(score, include_editor_metadata=True)
     return render(
         request,
         'music/score_edit.html',
@@ -159,25 +192,6 @@ def score_edit_view(request, pk):
             'chords': score_data.get('chords', []),
         },
     )
-
-
-def _score_data_with_manual_chord_edits(score):
-    """Overlay manual chord labels without changing the detected score data."""
-    score_data = deepcopy(score.data or {})
-    edits = (score.manual_chord_edits or {}).get('chords', {})
-    if not isinstance(edits, dict):
-        edits = {}
-
-    for measure in score_data.get('structure', {}).get('measures', []):
-        measure_number = measure.get('number')
-        for chord_index, chord in enumerate(measure.get('chords') or []):
-            detected_name = chord.get('chord_name') or 'N.C.'
-            chord['_detected_chord_name'] = detected_name
-            edit = edits.get(f'{measure_number}:{chord_index}')
-            if isinstance(edit, dict) and isinstance(edit.get('chord_name'), str):
-                chord['chord_name'] = edit['chord_name']
-                chord['_is_manually_edited'] = True
-    return score_data
 
 
 def _detected_chord_lookup(score):
@@ -209,10 +223,27 @@ def score_chord_edits_view(request, pk):
     except (TypeError, ValueError):
         return JsonResponse({'error': 'Corpo JSON invalido.'}, status=400)
     changes = payload.get('changes') if isinstance(payload, dict) else None
-    if not isinstance(changes, list) or len(changes) > 100:
+    added_chords = payload.get('added_chords', []) if isinstance(payload, dict) else None
+    deleted_chords = payload.get('deleted_chords', []) if isinstance(payload, dict) else None
+    deleted_added_chords = payload.get('deleted_added_chords', []) if isinstance(payload, dict) else None
+    if (
+        not isinstance(changes, list)
+        or not isinstance(added_chords, list)
+        or not isinstance(deleted_chords, list)
+        or not isinstance(deleted_added_chords, list)
+        or len(changes) + len(added_chords) + len(deleted_chords) + len(deleted_added_chords) > 100
+    ):
         return JsonResponse({'error': 'Lista de alteracoes invalida.'}, status=400)
 
     detected_chords = _detected_chord_lookup(score)
+    detected_beat_starts = {}
+    for measure in (score.data or {}).get('structure', {}).get('measures', []):
+        measure_number = measure.get('number')
+        if not isinstance(measure_number, int):
+            continue
+        for chord_index, chord in enumerate(measure.get('chords') or []):
+            detected_beat_starts[(measure_number, chord_index)] = chord.get('beat_start', 0)
+
     validated_changes = []
     for change in changes:
         if not isinstance(change, dict):
@@ -220,6 +251,20 @@ def score_chord_edits_view(request, pk):
         measure_number = change.get('measure_number')
         chord_index = change.get('chord_index')
         chord_name = change.get('chord_name')
+        beat_start = change.get('beat_start')
+        position_ratio_value = change.get('position_ratio')
+        position_ratio = (
+            _normalized_manual_position_ratio(position_ratio_value)
+            if position_ratio_value is not None
+            else None
+        )
+        normalized_beat_start = (
+            _normalized_manual_beat_start(beat_start)
+            if beat_start is not None
+            else None
+        )
+        if position_ratio is not None:
+            normalized_beat_start = position_ratio * 4
         if (
             isinstance(measure_number, bool)
             or not isinstance(measure_number, int)
@@ -227,25 +272,210 @@ def score_chord_edits_view(request, pk):
             or not isinstance(chord_index, int)
             or (measure_number, chord_index) not in detected_chords
             or not isinstance(chord_name, str)
+            or (beat_start is not None and normalized_beat_start is None)
+            or (position_ratio_value is not None and position_ratio is None)
         ):
             return JsonResponse({'error': 'Compasso ou acorde invalido.'}, status=400)
         chord_name = chord_name.strip()
         if not chord_name or len(chord_name) > 20 or not CHORD_NAME_PATTERN.fullmatch(chord_name):
             return JsonResponse({'error': 'Nome de acorde invalido.'}, status=400)
-        validated_changes.append((measure_number, chord_index, chord_name))
+        validated_changes.append(
+            (measure_number, chord_index, chord_name, normalized_beat_start, position_ratio)
+        )
+
+    validated_deleted_chords = []
+    for deleted_chord in deleted_chords:
+        if not isinstance(deleted_chord, dict):
+            return JsonResponse({'error': 'Exclusao de acorde invalida.'}, status=400)
+        measure_number = deleted_chord.get('measure_number')
+        chord_index = deleted_chord.get('chord_index')
+        if (
+            isinstance(measure_number, bool)
+            or not isinstance(measure_number, int)
+            or isinstance(chord_index, bool)
+            or not isinstance(chord_index, int)
+            or (measure_number, chord_index) not in detected_chords
+        ):
+            return JsonResponse({'error': 'Compasso ou acorde excluido invalido.'}, status=400)
+        validated_deleted_chords.append((measure_number, chord_index))
+
+    deleted_chord_keys = {
+        f'{measure_number}:{chord_index}'
+        for measure_number, chord_index in validated_deleted_chords
+    }
+    if len(deleted_chord_keys) != len(validated_deleted_chords) or any(
+        f'{measure_number}:{chord_index}' in deleted_chord_keys
+        for measure_number, chord_index, _, _, _ in validated_changes
+    ):
+        return JsonResponse({'error': 'Alteracoes de exclusao de acorde invalidas.'}, status=400)
+
+    measure_numbers = {measure_number for measure_number, _ in detected_chords}
+
+    validated_added_chords = []
+    for added_chord in added_chords:
+        if not isinstance(added_chord, dict):
+            return JsonResponse({'error': 'Acorde adicionado invalido.'}, status=400)
+        measure_number = added_chord.get('measure_number')
+        beat_start = _normalized_manual_beat_start(added_chord.get('beat_start'))
+        position_ratio_value = added_chord.get('position_ratio')
+        position_ratio = (
+            _normalized_manual_position_ratio(position_ratio_value)
+            if position_ratio_value is not None
+            else None
+        )
+        if position_ratio is not None:
+            beat_start = position_ratio * 4
+        chord_name = added_chord.get('chord_name')
+        previous_manual_chord_id = added_chord.get('previous_manual_chord_id')
+        if (
+            isinstance(measure_number, bool)
+            or not isinstance(measure_number, int)
+            or beat_start is None
+            or measure_number not in measure_numbers
+            or not isinstance(chord_name, str)
+            or (previous_manual_chord_id is not None and not isinstance(previous_manual_chord_id, str))
+            or (position_ratio_value is not None and position_ratio is None)
+        ):
+            return JsonResponse({'error': 'Compasso, beat ou acorde adicionado invalido.'}, status=400)
+        chord_name = chord_name.strip()
+        if not chord_name or len(chord_name) > 20 or not CHORD_NAME_PATTERN.fullmatch(chord_name):
+            return JsonResponse({'error': 'Nome de acorde invalido.'}, status=400)
+        validated_added_chords.append(
+            (measure_number, beat_start, chord_name, previous_manual_chord_id, position_ratio)
+        )
 
     manual_edits = dict(score.manual_chord_edits or {})
     chord_edits = dict(manual_edits.get('chords') or {})
-    for measure_number, chord_index, chord_name in validated_changes:
+    stored_deleted_chords = dict(manual_edits.get('deleted_chords') or {})
+    stored_deleted_chords.update({key: True for key in deleted_chord_keys})
+    for chord_key in deleted_chord_keys:
+        chord_edits.pop(chord_key, None)
+    effective_beat_starts = {
+        chord_key: beat_start
+        for chord_key, beat_start in detected_beat_starts.items()
+        if not stored_deleted_chords.get(f'{chord_key[0]}:{chord_key[1]}')
+    }
+    freely_positioned_detected = set()
+    for key, edit in chord_edits.items():
+        if not isinstance(edit, dict):
+            continue
+        manual_beat_start = _normalized_manual_beat_start(edit.get('beat_start'))
+        if manual_beat_start is None:
+            continue
+        try:
+            measure_number, chord_index = (int(value) for value in key.split(':', 1))
+        except (TypeError, ValueError):
+            continue
+        if (measure_number, chord_index) in effective_beat_starts:
+            effective_beat_starts[(measure_number, chord_index)] = manual_beat_start
+            if _normalized_manual_position_ratio(edit.get('position_ratio')) is not None:
+                freely_positioned_detected.add((measure_number, chord_index))
+    for measure_number, chord_index, chord_name, beat_start, position_ratio in validated_changes:
         key = f'{measure_number}:{chord_index}'
+        edit = dict(chord_edits.get(key) or {})
         if chord_name == detected_chords[(measure_number, chord_index)]:
-            chord_edits.pop(key, None)
+            edit.pop('chord_name', None)
         else:
-            chord_edits[key] = {'chord_name': chord_name}
+            edit['chord_name'] = chord_name
+        if beat_start is not None:
+            effective_beat_starts[(measure_number, chord_index)] = beat_start
+            if position_ratio is not None:
+                edit['beat_start'] = beat_start
+                edit['position_ratio'] = position_ratio
+                freely_positioned_detected.add((measure_number, chord_index))
+            elif beat_start == detected_beat_starts[(measure_number, chord_index)]:
+                edit.pop('beat_start', None)
+                edit.pop('position_ratio', None)
+            else:
+                edit['beat_start'] = beat_start
+        if edit:
+            chord_edits[key] = edit
+        else:
+            chord_edits.pop(key, None)
+
+    occupied_detected_beats = {}
+    detected_at_position = {}
+    for chord_key, beat_start in effective_beat_starts.items():
+        measure_number, _ = chord_key
+        location = (measure_number, beat_start)
+        other_key = detected_at_position.get(location)
+        if (
+            other_key is not None
+            and chord_key not in freely_positioned_detected
+            and other_key not in freely_positioned_detected
+        ):
+            return JsonResponse({'error': 'Dois acordes nao podem iniciar no mesmo beat.'}, status=400)
+        detected_at_position[location] = chord_key
+        occupied_detected_beats.setdefault(measure_number, set()).add(beat_start)
+
+    stored_added_chords = dict(manual_edits.get('added_chords') or {})
+    if len(set(deleted_added_chords)) != len(deleted_added_chords) or not all(
+        isinstance(manual_chord_id, str) and manual_chord_id in stored_added_chords
+        for manual_chord_id in deleted_added_chords
+    ):
+        return JsonResponse({'error': 'Acorde adicionado excluido invalido.'}, status=400)
+    deleted_added_chord_ids = set(deleted_added_chords)
+    if any(
+        previous_manual_chord_id in deleted_added_chord_ids
+        for _, _, _, previous_manual_chord_id, _ in validated_added_chords
+        if previous_manual_chord_id is not None
+    ):
+        return JsonResponse({'error': 'Alteracoes de exclusao de acorde invalidas.'}, status=400)
+    for manual_chord_id in deleted_added_chord_ids:
+        stored_added_chords.pop(manual_chord_id)
+    moved_added_ids = set()
+    for measure_number, _, _, previous_manual_chord_id, _ in validated_added_chords:
+        if previous_manual_chord_id is None:
+            continue
+        stored_chord = stored_added_chords.get(previous_manual_chord_id)
+        if (
+            not isinstance(stored_chord, dict)
+            or previous_manual_chord_id in moved_added_ids
+            or not previous_manual_chord_id.startswith(f'{measure_number}:')
+        ):
+            return JsonResponse({'error': 'Acorde adicionado invalido.'}, status=400)
+        moved_added_ids.add(previous_manual_chord_id)
+    occupied_added_beats = set()
+    for manual_chord_id, stored_chord in stored_added_chords.items():
+        if not isinstance(stored_chord, dict):
+            continue
+        try:
+            measure_number, _ = manual_chord_id.split(':', 1)
+            measure_number = int(measure_number)
+            beat_start = _normalized_manual_beat_start(stored_chord.get('beat_start'))
+        except (TypeError, ValueError):
+            continue
+        if beat_start is None:
+            continue
+        location = (measure_number, beat_start)
+        if manual_chord_id not in moved_added_ids:
+            occupied_added_beats.add(location)
+    for measure_number, beat_start, chord_name, previous_manual_chord_id, position_ratio in validated_added_chords:
+        location = (measure_number, beat_start)
+        if previous_manual_chord_id is None and (
+            beat_start in occupied_detected_beats.get(measure_number, set())
+            or location in occupied_added_beats
+        ):
+            return JsonResponse({'error': 'Ja existe um acorde iniciando nesse beat.'}, status=400)
+        occupied_added_beats.add(location)
+        manual_chord_id = previous_manual_chord_id or _manual_added_chord_id(measure_number, beat_start)
+        stored_added_chords[manual_chord_id] = {
+            'chord_name': chord_name,
+            'beat_start': beat_start,
+        }
+        if position_ratio is not None:
+            stored_added_chords[manual_chord_id]['position_ratio'] = position_ratio
     manual_edits['chords'] = chord_edits
+    manual_edits['added_chords'] = stored_added_chords
+    manual_edits['deleted_chords'] = stored_deleted_chords
     score.manual_chord_edits = manual_edits
     score.save(update_fields=['manual_chord_edits'])
-    return JsonResponse({'saved_changes': len(validated_changes)})
+    return JsonResponse({
+        'saved_changes': len(validated_changes),
+        'saved_added_chords': len(validated_added_chords),
+        'saved_deleted_chords': len(validated_deleted_chords),
+        'saved_deleted_added_chords': len(deleted_added_chord_ids),
+    })
 
 
 @login_required

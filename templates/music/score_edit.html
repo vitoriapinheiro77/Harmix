@@ -30,17 +30,23 @@
     .score-system { display: block; width: 100%; min-width: 44rem; margin: 0 0 1.7rem; }
     .score-staff-line, .score-bar-line, .score-rhythm-slash { stroke: #1c1a17; }
     .score-staff-line, .score-bar-line { stroke-width: 1.1; }
-    .score-rhythm-slash { stroke-width: 3; stroke-linecap: round; }
+    .score-rhythm-slash { stroke-width: 3; stroke-linecap: round; cursor: text; transition: stroke 120ms ease; }
+    .score-rhythm-slash:hover, .score-rhythm-slash:focus { stroke: #9c3d20; outline: none; }
+    .score-measure-hit-area { fill: transparent; cursor: pointer; }
+    .score-measure-hit-area.is-selected { fill: rgba(156, 61, 32, 0.12); }
     .score-measure-number { fill: #655f56; font: 11px Georgia, serif; }
     .score-chord-symbol {
         fill: #171511;
         font: 700 18px Georgia, serif;
         cursor: pointer;
+        touch-action: none;
+        user-select: none;
         transition: fill 120ms ease, filter 120ms ease;
     }
     .score-chord-symbol.is-manual { fill: #1f6d55; }
     .score-chord-symbol:hover, .score-chord-symbol:focus, .score-chord-symbol.is-selected { fill: #9c3d20; filter: drop-shadow(0 1px 0 #fff); outline: none; }
     .score-chord-symbol.is-selected { text-decoration: underline; }
+    .score-chord-symbol.is-dragging { cursor: grabbing; opacity: 0.76; }
     .score-clef { fill: #171511; font: 49px "Noto Music", "Segoe UI Symbol", serif; }
     .score-time-signature { fill: #171511; font: 700 18px Georgia, serif; }
     .score-empty { color: #6f675c; margin-top: 0.6rem; }
@@ -58,6 +64,8 @@
     }
     .chord-editor-popover input { width: 5rem; padding: 0.35rem; border: 0; border-radius: 0.2rem; color: #171511; background: #fffdf8; }
     .chord-editor-popover button { padding: 0.35rem 0.55rem; border: 0; border-radius: 0.2rem; color: #fff; background: #9c3d20; font-weight: 700; cursor: pointer; }
+    .chord-editor-popover label { color: #fffdf8; font-size: 0.75rem; font-weight: 700; }
+    .chord-editor-popover select { padding: 0.35rem; border: 0; border-radius: 0.2rem; color: #171511; background: #fffdf8; }
     .score-save-status {
         flex-basis: 100%;
         margin: 0;
@@ -152,10 +160,16 @@
         const exportButton = document.getElementById('exportScorePdf');
         const saveStatus = document.getElementById('scoreSaveStatus');
         const saveButtonLabel = 'Salvar altera\u00e7\u00f5es';
+        const chordNamePattern = /^(?:N\.C\.|[A-G](?:#|b)?(?:(?:(?:maj|min|m|dim|aug|add)?(?:[0-9]{1,2}|6\/9)?|(?:[0-9]{1,2})?sus(?:2|4)?))?(?:\((?:[#b]?(?:5|9|11|13))(?:,[#b]?(?:5|9|11|13))*\))?(?:\/[A-G](?:#|b)?)?)$/;
         const pendingChanges = new Map();
         let selectedSymbol = null;
+        let selectedMeasureNumber = null;
+        let selectedMeasureArea = null;
         let editor = null;
         let statusTimeout = null;
+        let measureAreas = new Map();
+        let dragState = null;
+        let suppressChordClick = false;
 
         function svgElement(name, attributes) {
             const element = document.createElementNS(svgNamespace, name);
@@ -176,7 +190,18 @@
             return Math.max(minimum, Math.min(value, maximum));
         }
 
+        function normalizePositionRatio(value) {
+            return clamp(Number(value), 0, 1);
+        }
+
+        function manualChordId(measureNumber, beatStart) {
+            return String(measureNumber) + ':' + String(clamp(Number(beatStart), 0, beatsPerMeasure));
+        }
+
         function changeKey(symbol) {
+            if (symbol.dataset.manualChordId) {
+                return 'added:' + symbol.dataset.manualChordId;
+            }
             return symbol.dataset.measureNumber + ':' + symbol.dataset.chordIndex;
         }
 
@@ -225,12 +250,154 @@
             }
             selectedSymbol = symbol;
             symbol.classList.add('is-selected');
+            selectMeasure(Number(symbol.dataset.measureNumber));
+        }
+
+        function targetIsEditable(target) {
+            return Boolean(target && target.closest(
+                'input, textarea, select, [contenteditable]:not([contenteditable="false"])',
+            ));
+        }
+
+        document.addEventListener('keydown', function (event) {
+            if (
+                (event.key !== 'Delete' && event.key !== 'Backspace')
+                || targetIsEditable(event.target)
+                || !selectedSymbol
+                || !selectedSymbol.isConnected
+            ) {
+                return;
+            }
+            event.preventDefault();
+            deleteChord(selectedSymbol);
+        });
+
+        function selectMeasure(measureNumber) {
+            if (selectedMeasureArea) {
+                selectedMeasureArea.classList.remove('is-selected');
+            }
+            selectedMeasureNumber = measureNumber;
+            selectedMeasureArea = measureAreas.get(measureNumber) || null;
+            if (selectedMeasureArea) {
+                selectedMeasureArea.classList.add('is-selected');
+            }
+        }
+
+        function measureForNumber(measureNumber) {
+            return measures.find(function (measure) {
+                return Number(measure.number) === Number(measureNumber);
+            });
+        }
+
+        function normalizeMeasureChordDurations(measure) {
+            measure.chords.sort(function (left, right) {
+                return Number(left.beat_start) - Number(right.beat_start);
+            });
+            measure.chords.forEach(function (chord, chordIndex) {
+                const nextChord = measure.chords[chordIndex + 1];
+                const nextStart = nextChord ? Number(nextChord.beat_start) : beatsPerMeasure;
+                chord.beat_duration = Math.max(0.1, nextStart - Number(chord.beat_start));
+            });
+        }
+
+        function chordForSymbol(symbol) {
+            const measure = measureForNumber(Number(symbol.dataset.measureNumber));
+            if (!measure) {
+                return null;
+            }
+            if (symbol.dataset.manualChordId) {
+                return measure.chords.find(function (chord) {
+                    return chord._manual_chord_id === symbol.dataset.manualChordId;
+                }) || null;
+            }
+            return measure.chords.find(function (chord) {
+                return Number(chord._detected_chord_index) === Number(symbol.dataset.chordIndex);
+            }) || null;
+        }
+
+        function updatePendingDetectedChord(symbol, chord) {
+            const key = changeKey(symbol);
+            const chordName = chord.chord_name || symbol.textContent;
+            const beatStart = Number(chord.beat_start);
+            const positionRatio = Number(chord._manual_position_ratio);
+            const hasManualPosition = Number.isFinite(positionRatio);
+            const isOriginal = (
+                chordName === symbol.dataset.detectedChord
+                && beatStart === Number(symbol.dataset.detectedBeatStart)
+                && !hasManualPosition
+            );
+            if (isOriginal && symbol.dataset.manual !== 'true') {
+                pendingChanges.delete(key);
+                chord._is_manually_edited = false;
+                return;
+            }
+            chord._is_manually_edited = true;
+            pendingChanges.set(key, {
+                kind: 'detected',
+                measure_number: Number(symbol.dataset.measureNumber),
+                chord_index: Number(symbol.dataset.chordIndex),
+                chord_name: chordName,
+                beat_start: beatStart,
+                position_ratio: hasManualPosition ? positionRatio : undefined,
+            });
+        }
+
+        function updatePendingAddedChord(chord, measureNumber, previousManualChordId) {
+            pendingChanges.set('added:' + chord._manual_chord_id, {
+                kind: 'added',
+                measure_number: measureNumber,
+                beat_start: Number(chord.beat_start),
+                position_ratio: Number.isFinite(Number(chord._manual_position_ratio))
+                    ? Number(chord._manual_position_ratio)
+                    : undefined,
+                chord_name: chord.chord_name,
+                previous_manual_chord_id: previousManualChordId || null,
+            });
+        }
+
+        function deleteChord(symbol) {
+            const chord = chordForSymbol(symbol);
+            const measureNumber = Number(symbol.dataset.measureNumber);
+            const measure = measureForNumber(measureNumber);
+            if (!chord || !measure) {
+                return;
+            }
+
+            if (chord._manual_chord_id) {
+                pendingChanges.delete('added:' + chord._manual_chord_id);
+                if (chord._persisted_manual_chord_id) {
+                    pendingChanges.set('deleted-added:' + chord._persisted_manual_chord_id, {
+                        kind: 'deleted-added',
+                        manual_chord_id: chord._persisted_manual_chord_id,
+                    });
+                }
+            } else {
+                pendingChanges.delete(changeKey(symbol));
+                pendingChanges.set('deleted:' + changeKey(symbol), {
+                    kind: 'deleted',
+                    measure_number: measureNumber,
+                    chord_index: Number(symbol.dataset.chordIndex),
+                });
+            }
+
+            measure.chords = measure.chords.filter(function (candidate) {
+                return candidate !== chord;
+            });
+            normalizeMeasureChordDurations(measure);
+            selectedSymbol = null;
+            closeEditor();
+            renderScore();
+            selectMeasure(measureNumber);
+            updateSaveButton(true);
         }
 
         function commitChord(symbol, input) {
             const chordName = input.value.trim();
-            const validChord = /^(?:[A-G](?:#|b)?[A-Za-z0-9+#()/.-]*|N\.C\.)$/;
-            if (!chordName || chordName.length > 20 || !validChord.test(chordName)) {
+            if (!chordName) {
+                deleteChord(symbol);
+                return;
+            }
+            if (!chordName || chordName.length > 20 || !chordNamePattern.test(chordName)) {
                 input.setCustomValidity('Informe um acorde valido, como Am7 ou G/B.');
                 input.reportValidity();
                 return;
@@ -238,18 +405,131 @@
             input.setCustomValidity('');
             symbol.textContent = chordName;
             const key = changeKey(symbol);
-            const isOriginal = chordName === symbol.dataset.detectedChord;
-            if (isOriginal && symbol.dataset.manual !== 'true') {
-                pendingChanges.delete(key);
-            } else {
-                pendingChanges.set(key, {
-                    measure_number: Number(symbol.dataset.measureNumber),
-                    chord_index: Number(symbol.dataset.chordIndex),
-                    chord_name: chordName,
+            if (symbol.dataset.manualChordId) {
+                const measureNumber = Number(symbol.dataset.measureNumber);
+                const measure = measureForNumber(measureNumber);
+                const addedChord = measure && measure.chords.find(function (chord) {
+                    return chord._manual_chord_id === symbol.dataset.manualChordId;
                 });
+                if (addedChord) {
+                    addedChord.chord_name = chordName;
+                    updatePendingAddedChord(
+                        addedChord,
+                        measureNumber,
+                        addedChord._persisted_manual_chord_id,
+                    );
+                }
+                closeEditor();
+                updateSaveButton(true);
+                return;
             }
-            symbol.classList.toggle('is-manual', !isOriginal || symbol.dataset.manual === 'true');
+            const chord = chordForSymbol(symbol);
+            if (chord) {
+                chord.chord_name = chordName;
+                updatePendingDetectedChord(symbol, chord);
+            }
+            symbol.classList.toggle('is-manual', chord && chord._is_manually_edited);
             closeEditor();
+            updateSaveButton(true);
+        }
+
+        function beginChordDrag(event, symbol) {
+            if (event.button !== 0 || event.pointerType === 'touch' && event.isPrimary === false) {
+                return;
+            }
+            const chord = chordForSymbol(symbol);
+            if (!chord) {
+                return;
+            }
+            event.preventDefault();
+            closeEditor();
+            selectChord(symbol);
+            dragState = {
+                symbol: symbol,
+                chord: chord,
+                measureNumber: Number(symbol.dataset.measureNumber),
+                pointerId: event.pointerId,
+                initialClientX: event.clientX,
+                originalX: Number(symbol.getAttribute('x')),
+                playLeft: Number(symbol.dataset.playLeft),
+                playWidth: Number(symbol.dataset.playWidth),
+            };
+            symbol.classList.add('is-dragging');
+            symbol.setPointerCapture(event.pointerId);
+            symbol.addEventListener('pointermove', dragChord);
+            symbol.addEventListener('pointerup', finishChordDrag, { once: true });
+            symbol.addEventListener('pointercancel', cancelChordDrag, { once: true });
+        }
+
+        function dragCursorX(event, state) {
+            const svg = state.symbol.ownerSVGElement;
+            const point = svg.createSVGPoint();
+            point.x = event.clientX;
+            point.y = event.clientY;
+            const cursorX = point.matrixTransform(svg.getScreenCTM().inverse()).x;
+            return clamp(cursorX, state.playLeft, state.playLeft + state.playWidth);
+        }
+
+        function dragChord(event) {
+            if (!dragState || event.pointerId !== dragState.pointerId) {
+                return;
+            }
+            dragState.symbol.setAttribute('x', dragCursorX(event, dragState));
+        }
+
+        function clearDragState() {
+            if (!dragState) {
+                return null;
+            }
+            const state = dragState;
+            state.symbol.classList.remove('is-dragging');
+            state.symbol.removeEventListener('pointermove', dragChord);
+            if (state.symbol.hasPointerCapture(state.pointerId)) {
+                state.symbol.releasePointerCapture(state.pointerId);
+            }
+            dragState = null;
+            return state;
+        }
+
+        function cancelChordDrag(event) {
+            if (!dragState || event.pointerId !== dragState.pointerId) {
+                return;
+            }
+            const state = clearDragState();
+            state.symbol.setAttribute('x', state.originalX);
+        }
+
+        function finishChordDrag(event) {
+            if (!dragState || event.pointerId !== dragState.pointerId) {
+                return;
+            }
+            const state = clearDragState();
+            if (Math.abs(event.clientX - state.initialClientX) < 3) {
+                state.symbol.setAttribute('x', state.originalX);
+                return;
+            }
+            suppressChordClick = true;
+            const cursorX = dragCursorX(event, state);
+            const positionRatio = normalizePositionRatio(
+                (cursorX - state.playLeft) / state.playWidth,
+            );
+            const beatStart = positionRatio * beatsPerMeasure;
+            const measure = measureForNumber(state.measureNumber);
+            if (!measure) {
+                renderScore();
+                return;
+            }
+            const previousManualChordId = state.chord._persisted_manual_chord_id;
+            state.chord.beat_start = beatStart;
+            state.chord._manual_position_ratio = positionRatio;
+            if (state.chord._manual_chord_id) {
+                updatePendingAddedChord(state.chord, state.measureNumber, previousManualChordId);
+            } else {
+                updatePendingDetectedChord(state.symbol, state.chord);
+            }
+            normalizeMeasureChordDurations(measure);
+            renderScore();
+            selectMeasure(state.measureNumber);
             updateSaveButton(true);
         }
 
@@ -267,6 +547,7 @@
             input.maxLength = 20;
             input.value = symbol.textContent;
             input.setAttribute('aria-label', 'Novo acorde');
+            input.addEventListener('input', function () { input.setCustomValidity(''); });
             const confirm = document.createElement('button');
             confirm.type = 'submit';
             confirm.textContent = 'OK';
@@ -284,6 +565,79 @@
             sheet.appendChild(editor);
             input.focus();
             input.select();
+        }
+
+        function openAddChordEditor(measureNumber, beatStart, slash) {
+            selectMeasure(measureNumber);
+            closeEditor();
+            const bounds = slash.getBoundingClientRect();
+            const sheetBounds = sheet.getBoundingClientRect();
+            editor = document.createElement('form');
+            editor.className = 'chord-editor-popover';
+            editor.style.left = (bounds.left - sheetBounds.left + sheet.scrollLeft - 12) + 'px';
+            editor.style.top = (bounds.top - sheetBounds.top + sheet.scrollTop - 42) + 'px';
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.maxLength = 20;
+            input.placeholder = 'Acorde';
+            input.setAttribute('aria-label', 'Novo acorde no beat ' + (beatStart + 1));
+            input.addEventListener('input', function () { input.setCustomValidity(''); });
+            editor.appendChild(input);
+            editor.addEventListener('submit', function (event) {
+                event.preventDefault();
+                commitAddedChord(input, measureNumber, beatStart);
+            });
+            input.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    commitAddedChord(input, measureNumber, beatStart);
+                }
+                if (event.key === 'Escape') {
+                    closeEditor();
+                    slash.focus();
+                }
+            });
+            sheet.appendChild(editor);
+            input.focus();
+        }
+
+        function commitAddedChord(input, measureNumber, beatStart) {
+            const chordName = input.value.trim();
+            const measure = measureForNumber(measureNumber);
+            if (!chordName || chordName.length > 20 || !chordNamePattern.test(chordName)) {
+                input.setCustomValidity('Informe um acorde valido, como Am7 ou G/B.');
+                input.reportValidity();
+                return;
+            }
+            if (!measure || measure.chords.some(function (chord) {
+                return Math.abs(Number(chord.beat_start) - beatStart) < 0.001;
+            })) {
+                input.setCustomValidity('Ja existe um acorde iniciando nesse beat.');
+                input.reportValidity();
+                return;
+            }
+            input.setCustomValidity('');
+            const addedChordId = manualChordId(measureNumber, beatStart);
+            measure.chords.push({
+                chord_name: chordName,
+                beat_start: beatStart,
+                _manual_chord_id: addedChordId,
+                _is_manually_edited: true,
+                _is_manually_added: true,
+            });
+            normalizeMeasureChordDurations(measure);
+            pendingChanges.set('added:' + addedChordId, {
+                kind: 'added',
+                measure_number: measureNumber,
+                beat_start: beatStart,
+                chord_name: chordName,
+                previous_manual_chord_id: null,
+            });
+            closeEditor();
+            renderScore();
+            selectMeasure(measureNumber);
+            updateSaveButton(true);
         }
 
         function csrfToken() {
@@ -304,6 +658,36 @@
             saveButton.setAttribute('aria-busy', 'true');
             setSaveStatus('Salvando altera\u00e7\u00f5es...', false);
             try {
+                const changes = [];
+                const addedChords = [];
+                const deletedChords = [];
+                const deletedAddedChords = [];
+                pendingChanges.forEach(function (change) {
+                    if (change.kind === 'added') {
+                        addedChords.push({
+                            measure_number: change.measure_number,
+                            beat_start: change.beat_start,
+                            position_ratio: change.position_ratio,
+                            chord_name: change.chord_name,
+                            previous_manual_chord_id: change.previous_manual_chord_id,
+                        });
+                    } else if (change.kind === 'deleted') {
+                        deletedChords.push({
+                            measure_number: change.measure_number,
+                            chord_index: change.chord_index,
+                        });
+                    } else if (change.kind === 'deleted-added') {
+                        deletedAddedChords.push(change.manual_chord_id);
+                    } else {
+                        changes.push({
+                            measure_number: change.measure_number,
+                            chord_index: change.chord_index,
+                            chord_name: change.chord_name,
+                            beat_start: change.beat_start,
+                            position_ratio: change.position_ratio,
+                        });
+                    }
+                });
                 const response = await fetch('{% url "music:score_chord_edits" project.pk %}', {
                     method: 'POST',
                     credentials: 'same-origin',
@@ -311,13 +695,34 @@
                         'Content-Type': 'application/json',
                         'X-CSRFToken': csrfToken(),
                     },
-                    body: JSON.stringify({ changes: Array.from(pendingChanges.values()) }),
+                    body: JSON.stringify({
+                        changes: changes,
+                        added_chords: addedChords,
+                        deleted_chords: deletedChords,
+                        deleted_added_chords: deletedAddedChords,
+                    }),
                 });
                 const result = await response.json().catch(function () { return {}; });
                 if (!response.ok) {
                     throw new Error(result.error || 'Nao foi possivel salvar as alteracoes.');
                 }
                 pendingChanges.forEach(function (change) {
+                    if (change.kind === 'added') {
+                        const measure = measureForNumber(change.measure_number);
+                        const chord = measure && measure.chords.find(function (candidate) {
+                            return candidate._manual_chord_id === (
+                                change.previous_manual_chord_id
+                                || manualChordId(change.measure_number, change.beat_start)
+                            );
+                        });
+                        if (chord) {
+                            chord._persisted_manual_chord_id = chord._manual_chord_id;
+                        }
+                        return;
+                    }
+                    if (change.kind === 'deleted' || change.kind === 'deleted-added') {
+                        return;
+                    }
                     const symbol = document.querySelector('[data-measure-number="' + change.measure_number + '"][data-chord-index="' + change.chord_index + '"]');
                     if (symbol) {
                         symbol.dataset.manual = symbol.textContent !== symbol.dataset.detectedChord ? 'true' : 'false';
@@ -377,7 +782,23 @@
                 const playLeft = measureX + padding;
                 const playRight = measureX + measureWidth - 8;
                 const playWidth = Math.max(playRight - playLeft, 36);
-                const chords = measure.chords && measure.chords.length ? measure.chords : [{ chord_name: 'N.C.', beat_start: 0, beat_duration: 4 }];
+                const chords = measure.chords || [];
+
+                const measureArea = svgElement('rect', {
+                    x: measureX, y: staffTop - 29, width: measureWidth, height: (staffBottom - staffTop) + 35,
+                    class: 'score-measure-hit-area',
+                    role: 'button', tabindex: '0',
+                    'aria-label': 'Selecionar compasso ' + (measure.number || ''),
+                });
+                measureAreas.set(Number(measure.number), measureArea);
+                measureArea.addEventListener('click', function () { selectMeasure(Number(measure.number)); });
+                measureArea.addEventListener('keydown', function (event) {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        selectMeasure(Number(measure.number));
+                    }
+                });
+                svg.appendChild(measureArea);
 
                 addText(svg, String(measure.number || ''), measureX + 6, staffTop - 6, 'score-measure-number');
                 chords.forEach(function (chord, chordIndex) {
@@ -385,31 +806,59 @@
                     const duration = Math.max(0, Number(chord.beat_duration || beatsPerMeasure));
                     const end = clamp(start + duration, start + 0.1, beatsPerMeasure);
                     const center = start + ((end - start) / 2);
-                    const chordX = playLeft + ((center / beatsPerMeasure) * playWidth);
+                    const positionRatio = Number(chord._manual_position_ratio);
+                    const chordX = Number.isFinite(positionRatio)
+                        ? playLeft + (normalizePositionRatio(positionRatio) * playWidth)
+                        : playLeft + ((center / beatsPerMeasure) * playWidth);
                     const symbol = addText(svg, chord.chord_name || 'N.C.', chordX, staffTop - 17, 'score-chord-symbol', {
                         'text-anchor': 'middle',
                         'data-measure-number': measure.number || '',
-                        'data-chord-index': chordIndex,
+                        'data-chord-index': chord._detected_chord_index === undefined ? chordIndex : chord._detected_chord_index,
                     });
                     symbol.setAttribute('data-beat-start', start);
                     symbol.dataset.detectedChord = chord._detected_chord_name || chord.chord_name || 'N.C.';
+                    symbol.dataset.detectedBeatStart = chord._detected_beat_start === undefined ? start : chord._detected_beat_start;
+                    symbol.dataset.playLeft = playLeft;
+                    symbol.dataset.playWidth = playWidth;
+                    if (chord._manual_chord_id) {
+                        symbol.dataset.manualChordId = chord._manual_chord_id;
+                    }
                     symbol.dataset.manual = chord._is_manually_edited ? 'true' : 'false';
                     symbol.classList.toggle('is-manual', symbol.dataset.manual === 'true');
                     symbol.setAttribute('role', 'button');
                     symbol.setAttribute('tabindex', '0');
-                    symbol.addEventListener('click', function () { openEditor(symbol); });
+                    symbol.addEventListener('pointerdown', function (event) { beginChordDrag(event, symbol); });
+                    symbol.addEventListener('click', function (event) {
+                        if (suppressChordClick) {
+                            event.preventDefault();
+                            suppressChordClick = false;
+                            return;
+                        }
+                        openEditor(symbol);
+                    });
                     symbol.addEventListener('keydown', function (event) {
                         if (event.key === 'Enter' || event.key === ' ') {
                             event.preventDefault();
                             openEditor(symbol);
+                        } else if (event.key === 'Delete' || event.key === 'Backspace') {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            deleteChord(symbol);
                         }
                     });
                 });
                 for (let beat = 0; beat < beatsPerMeasure; beat += 1) {
                     const slashX = playLeft + (((beat + 0.5) / beatsPerMeasure) * playWidth);
-                    svg.appendChild(svgElement('line', {
+                    const slash = svgElement('line', {
                         x1: slashX - 5, y1: staffTop + 33, x2: slashX + 5, y2: staffTop + 21, class: 'score-rhythm-slash',
-                    }));
+                        'data-measure-number': measure.number || '', 'data-beat-start': beat,
+                        role: 'button', tabindex: '0',
+                        'aria-label': 'Adicionar acorde no beat ' + (beat + 1) + ' do compasso ' + (measure.number || ''),
+                    });
+                    slash.addEventListener('dblclick', function () {
+                        openAddChordEditor(Number(measure.number), beat, slash);
+                    });
+                    svg.appendChild(slash);
                 }
             });
             visual.appendChild(svg);
@@ -419,9 +868,18 @@
             visual.innerHTML = '<p class="score-empty">Nenhum compasso disponivel.</p>';
             return;
         }
-        for (let index = 0; index < measures.length; index += measuresPerSystem) {
-            renderSystem(measures.slice(index, index + measuresPerSystem), index / measuresPerSystem);
+        function renderScore() {
+            visual.innerHTML = '';
+            measureAreas = new Map();
+            selectedMeasureArea = null;
+            for (let index = 0; index < measures.length; index += measuresPerSystem) {
+                renderSystem(measures.slice(index, index + measuresPerSystem), index / measuresPerSystem);
+            }
+            if (selectedMeasureNumber !== null) {
+                selectMeasure(selectedMeasureNumber);
+            }
         }
+        renderScore();
     })();
 </script>
 {% endif %}

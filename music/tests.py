@@ -15,7 +15,8 @@ from .models import MusicProject, Score, Track
 from .pipeline import HarmixPipeline
 from .separation import SeparationError, run_demucs, select_chord_source
 from .structure import MusicalStructureBuilder, build_musical_structure
-from .utils import enqueue_project_reprocessing, pdf_score_data
+from .utils import enqueue_project_reprocessing, pdf_score_data, score_data_with_manual_chord_edits
+from .views import CHORD_NAME_PATTERN
 
 
 class _ChordChangeStub:
@@ -561,6 +562,15 @@ class ProjectReprocessTests(TestCase):
         self.assertContains(response, 'scoreVisual')
         self.assertContains(response, 'scoreMeasuresData')
         self.assertContains(response, 'data-measure-number')
+        self.assertContains(response, 'score-rhythm-slash')
+        self.assertContains(response, 'dblclick')
+        self.assertContains(response, 'pointerdown')
+        self.assertContains(response, 'position_ratio')
+        self.assertContains(response, 'deleted_chords')
+        self.assertContains(response, 'deleted_added_chords')
+        self.assertContains(response, "event.key === 'Delete'")
+        self.assertNotContains(response, 'toFixed(3)')
+        self.assertContains(response, 'Adicionar acorde')
         self.assertContains(response, 'Exportar PDF')
         self.assertContains(response, reverse('music:export_pdf', args=[self.project.pk]))
 
@@ -589,6 +599,180 @@ class ProjectReprocessTests(TestCase):
         self.assertEqual(
             score.data['structure']['measures'][0]['chords'][0]['chord_name'],
             'F',
+        )
+
+    def test_manual_added_chord_is_overlaid_and_splits_the_measure_for_pdf(self):
+        score = Score.objects.create(
+            music_project=self.project,
+            data={
+                'structure': {
+                    'measures': [
+                        {
+                            'number': 1,
+                            'chords': [{'chord_name': 'F', 'beat_start': 0, 'beat_duration': 4}],
+                        },
+                    ],
+                },
+            },
+            manual_chord_edits={
+                'added_chords': {'1:2': {'chord_name': 'C', 'beat_start': 2}},
+            },
+        )
+
+        rendered_data = score_data_with_manual_chord_edits(score)
+        rendered_chords = rendered_data['structure']['measures'][0]['chords']
+
+        self.assertEqual([chord['chord_name'] for chord in rendered_chords], ['F', 'C'])
+        self.assertEqual([chord['beat_start'] for chord in rendered_chords], [0, 2])
+        self.assertEqual([chord['beat_duration'] for chord in rendered_chords], [2.0, 2.0])
+        self.assertEqual(score.data['structure']['measures'][0]['chords'][0]['chord_name'], 'F')
+        self.assertEqual(score.data['structure']['measures'][0]['chords'][0]['beat_duration'], 4)
+
+    def test_manual_deleted_detected_chord_is_removed_from_editor_and_pdf_data(self):
+        score = Score.objects.create(
+            music_project=self.project,
+            data={
+                'structure': {
+                    'measures': [{
+                        'number': 1,
+                        'chords': [
+                            {'chord_name': 'F', 'beat_start': 0, 'beat_duration': 2},
+                            {'chord_name': 'C', 'beat_start': 2, 'beat_duration': 2},
+                        ],
+                    }],
+                },
+            },
+            manual_chord_edits={'deleted_chords': {'1:0': True}},
+        )
+
+        editor_data = score_data_with_manual_chord_edits(score, include_editor_metadata=True)
+        pdf_data = pdf_score_data(self.project, score)
+
+        self.assertEqual(
+            [chord['chord_name'] for chord in editor_data['structure']['measures'][0]['chords']],
+            ['C'],
+        )
+        self.assertEqual(
+            [chord['chord_name'] for chord in pdf_data['structure']['measures'][0]['chords']],
+            ['C'],
+        )
+        self.assertEqual(score.data['structure']['measures'][0]['chords'][0]['chord_name'], 'F')
+
+    def test_fully_deleted_measure_stays_blank_in_editor_and_pdf_data(self):
+        score = Score.objects.create(
+            music_project=self.project,
+            data={
+                'structure': {
+                    'measures': [{
+                        'number': 1,
+                        'chords': [{'chord_name': 'F', 'beat_start': 0, 'beat_duration': 4}],
+                    }],
+                },
+            },
+            manual_chord_edits={'deleted_chords': {'1:0': True}},
+        )
+
+        editor_data = score_data_with_manual_chord_edits(score, include_editor_metadata=True)
+        pdf_data = pdf_score_data(self.project, score)
+
+        self.assertEqual(editor_data['structure']['measures'][0]['chords'], [])
+        self.assertEqual(pdf_data['structure']['measures'][0]['chords'][0]['chord_name'], ' ')
+        self.assertEqual(score.data['structure']['measures'][0]['chords'][0]['chord_name'], 'F')
+
+    def test_detected_no_chord_label_remains_visible(self):
+        score = Score.objects.create(
+            music_project=self.project,
+            data={
+                'structure': {
+                    'measures': [{
+                        'number': 1,
+                        'chords': [{'chord_name': 'N.C.', 'beat_start': 0, 'beat_duration': 4}],
+                    }],
+                },
+            },
+        )
+
+        editor_data = score_data_with_manual_chord_edits(score)
+        pdf_data = pdf_score_data(self.project, score)
+
+        self.assertEqual(editor_data['structure']['measures'][0]['chords'][0]['chord_name'], 'N.C.')
+        self.assertEqual(pdf_data['structure']['measures'][0]['chords'][0]['chord_name'], 'N.C.')
+
+    def test_manual_position_moves_detected_chord_without_mutating_detected_data(self):
+        score = Score.objects.create(
+            music_project=self.project,
+            data={
+                'structure': {
+                    'measures': [
+                        {
+                            'number': 1,
+                            'chords': [
+                                {'chord_name': 'F', 'beat_start': 0, 'beat_duration': 2},
+                                {'chord_name': 'C', 'beat_start': 2, 'beat_duration': 2},
+                            ],
+                        },
+                    ],
+                },
+            },
+            manual_chord_edits={'chords': {'1:0': {'beat_start': 1.375}}},
+        )
+
+        rendered_data = pdf_score_data(self.project, score)
+        rendered_chords = rendered_data['structure']['measures'][0]['chords']
+
+        self.assertEqual([chord['chord_name'] for chord in rendered_chords], ['F', 'C'])
+        self.assertEqual([chord['beat_start'] for chord in rendered_chords], [1.375, 2])
+        self.assertEqual([chord['beat_duration'] for chord in rendered_chords], [0.625, 2.0])
+        self.assertEqual(score.data['structure']['measures'][0]['chords'][0]['beat_start'], 0)
+
+    def test_manual_added_chord_keeps_stable_id_when_moved_continuously(self):
+        score = Score.objects.create(
+            music_project=self.project,
+            data={
+                'structure': {
+                    'measures': [
+                        {
+                            'number': 1,
+                            'chords': [{'chord_name': 'F', 'beat_start': 0, 'beat_duration': 4}],
+                        },
+                    ],
+                },
+            },
+            manual_chord_edits={
+                'added_chords': {'1:2': {'chord_name': 'C', 'beat_start': 2}},
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse('music:score_chord_edits', args=[self.project.pk]),
+            data=json.dumps({
+                'changes': [],
+                'added_chords': [{
+                    'measure_number': 1,
+                    'beat_start': 2,
+                    'position_ratio': 0.586789123456,
+                    'chord_name': 'C',
+                    'previous_manual_chord_id': '1:2',
+                }],
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        score.refresh_from_db()
+        stored_chord = score.manual_chord_edits['added_chords']['1:2']
+        self.assertEqual(stored_chord['chord_name'], 'C')
+        self.assertEqual(stored_chord['position_ratio'], 0.586789123456)
+        self.assertEqual(stored_chord['beat_start'], 0.586789123456 * 4)
+        rendered_data = score_data_with_manual_chord_edits(score, include_editor_metadata=True)
+        self.assertEqual(
+            [chord['beat_start'] for chord in rendered_data['structure']['measures'][0]['chords']],
+            [0, 0.586789123456 * 4],
+        )
+        self.assertEqual(
+            rendered_data['structure']['measures'][0]['chords'][1]['_manual_position_ratio'],
+            0.586789123456,
         )
 
     @patch('music.views._try_regenerate_pdf')
@@ -670,6 +854,255 @@ class ProjectReprocessTests(TestCase):
         response = self.client.get(reverse('music:score_edit', args=[self.project.pk]))
         self.assertContains(response, 'Am7')
 
+    def test_owner_can_save_detected_chord_position(self):
+        score = Score.objects.create(
+            music_project=self.project,
+            data={
+                'structure': {
+                    'measures': [
+                        {
+                            'number': 1,
+                            'chords': [
+                                {'chord_name': 'F', 'beat_start': 0},
+                                {'chord_name': 'C', 'beat_start': 2},
+                            ],
+                        },
+                    ],
+                },
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse('music:score_chord_edits', args=[self.project.pk]),
+            data=json.dumps({
+                'changes': [{
+                    'measure_number': 1,
+                    'chord_index': 0,
+                    'chord_name': 'F',
+                    'beat_start': 0,
+                    'position_ratio': 0.437123456789,
+                }],
+                'added_chords': [],
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        score.refresh_from_db()
+        saved_edit = score.manual_chord_edits['chords']['1:0']
+        self.assertEqual(saved_edit['position_ratio'], 0.437123456789)
+        self.assertEqual(saved_edit['beat_start'], 0.437123456789 * 4)
+        self.assertEqual(score.data['structure']['measures'][0]['chords'][0]['beat_start'], 0)
+
+        editor_data = score_data_with_manual_chord_edits(score, include_editor_metadata=True)
+        editor_chord = editor_data['structure']['measures'][0]['chords'][0]
+        self.assertEqual(editor_chord['_manual_position_ratio'], 0.437123456789)
+        self.assertEqual(editor_chord['beat_start'], 0.437123456789 * 4)
+
+        pdf_chord = pdf_score_data(self.project, score)['structure']['measures'][0]['chords'][0]
+        pdf_center_beat = pdf_chord['beat_start'] + (pdf_chord['beat_duration'] / 2)
+        self.assertAlmostEqual(pdf_center_beat, 0.437123456789 * 4, places=9)
+
+    def test_continuous_detected_position_may_overlap_an_existing_beat(self):
+        Score.objects.create(
+            music_project=self.project,
+            data={
+                'structure': {
+                    'measures': [{
+                        'number': 1,
+                        'chords': [
+                            {'chord_name': 'F', 'beat_start': 0},
+                            {'chord_name': 'C', 'beat_start': 2},
+                        ],
+                    }],
+                },
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse('music:score_chord_edits', args=[self.project.pk]),
+            data=json.dumps({
+                'changes': [{
+                    'measure_number': 1,
+                    'chord_index': 0,
+                    'chord_name': 'F',
+                    'beat_start': 2,
+                    'position_ratio': 0.5,
+                }],
+                'added_chords': [],
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_owner_can_save_detected_chord_deletion_without_mutating_score_data(self):
+        score = Score.objects.create(
+            music_project=self.project,
+            data={
+                'structure': {
+                    'measures': [{
+                        'number': 1,
+                        'chords': [
+                            {'chord_name': 'F', 'beat_start': 0},
+                            {'chord_name': 'C', 'beat_start': 2},
+                        ],
+                    }],
+                },
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse('music:score_chord_edits', args=[self.project.pk]),
+            data=json.dumps({
+                'changes': [],
+                'added_chords': [],
+                'deleted_chords': [{'measure_number': 1, 'chord_index': 0}],
+                'deleted_added_chords': [],
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['saved_deleted_chords'], 1)
+        score.refresh_from_db()
+        self.assertTrue(score.manual_chord_edits['deleted_chords']['1:0'])
+        self.assertEqual(score.data['structure']['measures'][0]['chords'][0]['chord_name'], 'F')
+        self.assertEqual(
+            [chord['chord_name'] for chord in pdf_score_data(self.project, score)['structure']['measures'][0]['chords']],
+            ['C'],
+        )
+
+    def test_owner_can_delete_a_persisted_manual_added_chord(self):
+        score = Score.objects.create(
+            music_project=self.project,
+            data={
+                'structure': {
+                    'measures': [{
+                        'number': 1,
+                        'chords': [{'chord_name': 'F', 'beat_start': 0, 'beat_duration': 4}],
+                    }],
+                },
+            },
+            manual_chord_edits={
+                'added_chords': {'1:2': {'chord_name': 'C', 'beat_start': 2}},
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse('music:score_chord_edits', args=[self.project.pk]),
+            data=json.dumps({
+                'changes': [],
+                'added_chords': [],
+                'deleted_chords': [],
+                'deleted_added_chords': ['1:2'],
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['saved_deleted_added_chords'], 1)
+        score.refresh_from_db()
+        self.assertNotIn('1:2', score.manual_chord_edits['added_chords'])
+        self.assertEqual(score.data['structure']['measures'][0]['chords'][0]['chord_name'], 'F')
+        self.assertEqual(
+            [chord['chord_name'] for chord in pdf_score_data(self.project, score)['structure']['measures'][0]['chords']],
+            ['F'],
+        )
+
+    def test_detected_chord_position_rejects_an_occupied_beat(self):
+        Score.objects.create(
+            music_project=self.project,
+            data={
+                'structure': {
+                    'measures': [
+                        {
+                            'number': 1,
+                            'chords': [
+                                {'chord_name': 'F', 'beat_start': 0},
+                                {'chord_name': 'C', 'beat_start': 2},
+                            ],
+                        },
+                    ],
+                },
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse('music:score_chord_edits', args=[self.project.pk]),
+            data=json.dumps({
+                'changes': [{'measure_number': 1, 'chord_index': 0, 'chord_name': 'F', 'beat_start': 2}],
+                'added_chords': [],
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_owner_can_add_manual_chord_without_changing_detected_score(self):
+        score = Score.objects.create(
+            music_project=self.project,
+            data={
+                'structure': {
+                    'measures': [
+                        {
+                            'number': 1,
+                            'chords': [{'chord_name': 'F', 'beat_start': 0, 'beat_duration': 4}],
+                        },
+                    ],
+                },
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse('music:score_chord_edits', args=[self.project.pk]),
+            data=json.dumps({
+                'changes': [],
+                'added_chords': [{'measure_number': 1, 'beat_start': 2, 'chord_name': 'C'}],
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        score.refresh_from_db()
+        self.assertEqual(score.data['structure']['measures'][0]['chords'][0]['chord_name'], 'F')
+        self.assertEqual(score.manual_chord_edits['added_chords']['1:2']['chord_name'], 'C')
+        response = self.client.get(reverse('music:score_edit', args=[self.project.pk]))
+        self.assertContains(response, 'C')
+
+    def test_manual_added_chord_rejects_an_existing_beat(self):
+        Score.objects.create(
+            music_project=self.project,
+            data={
+                'structure': {
+                    'measures': [
+                        {
+                            'number': 1,
+                            'chords': [{'chord_name': 'F', 'beat_start': 0, 'beat_duration': 4}],
+                        },
+                    ],
+                },
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse('music:score_chord_edits', args=[self.project.pk]),
+            data=json.dumps({
+                'changes': [],
+                'added_chords': [{'measure_number': 1, 'beat_start': 0, 'chord_name': 'C'}],
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+
     def test_manual_chord_edit_requires_valid_owned_chord(self):
         Score.objects.create(
             music_project=self.project,
@@ -703,6 +1136,38 @@ class ProjectReprocessTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
+
+    def test_chord_name_validation_accepts_common_chord_structures(self):
+        valid_chords = [
+            'C', 'Cm', 'C7', 'Cm7', 'Cmaj7', 'Cdim', 'Caug', 'Csus2', 'Csus4',
+            'C#', 'C#m', 'Bb', 'Bbm', 'F#m7', 'G/B', 'D/F#', 'C7sus4', 'C6/9',
+            'C7(b9,#11)', 'N.C.',
+        ]
+        invalid_chords = ['Emm', 'H7', 'C/7', 'CmajX', 'C//G', 'not-a-chord']
+
+        for chord_name in valid_chords:
+            with self.subTest(chord_name=chord_name):
+                self.assertIsNotNone(CHORD_NAME_PATTERN.fullmatch(chord_name))
+        for chord_name in invalid_chords:
+            with self.subTest(chord_name=chord_name):
+                self.assertIsNone(CHORD_NAME_PATTERN.fullmatch(chord_name))
+
+    def test_manual_chord_edit_accepts_em(self):
+        score = Score.objects.create(
+            music_project=self.project,
+            data={'structure': {'measures': [{'number': 1, 'chords': [{'chord_name': 'F'}]}]}},
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse('music:score_chord_edits', args=[self.project.pk]),
+            data=json.dumps({'changes': [{'measure_number': 1, 'chord_index': 0, 'chord_name': 'Em'}]}),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        score.refresh_from_db()
+        self.assertEqual(score.manual_chord_edits['chords']['1:0']['chord_name'], 'Em')
 
     def test_owner_can_stream_original_and_separated_audio(self):
         self.project.audio_file.save(
