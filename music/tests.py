@@ -1,7 +1,9 @@
 from unittest.mock import MagicMock, patch
+from copy import deepcopy
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from xml.etree import ElementTree as ET
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -15,7 +17,12 @@ from .models import MusicProject, Score, Track
 from .pipeline import HarmixPipeline
 from .separation import SeparationError, run_demucs, select_chord_source
 from .structure import MusicalStructureBuilder, build_musical_structure
-from .utils import enqueue_project_reprocessing, pdf_score_data, score_data_with_manual_chord_edits
+from .musicxml import MUSICXML_DIVISIONS
+from .utils import (
+    enqueue_project_reprocessing,
+    pdf_score_data,
+    score_data_with_manual_chord_edits,
+)
 from .views import CHORD_NAME_PATTERN
 
 
@@ -569,10 +576,18 @@ class ProjectReprocessTests(TestCase):
         self.assertContains(response, 'deleted_chords')
         self.assertContains(response, 'deleted_added_chords')
         self.assertContains(response, "event.key === 'Delete'")
+        self.assertContains(response, 'scoreHeaderTitle')
+        self.assertContains(response, 'scoreHeaderArtist')
+        self.assertContains(response, 'scoreHeaderKey')
+        self.assertContains(response, 'scoreHeaderBpm')
+        self.assertContains(response, 'header_edits')
         self.assertNotContains(response, 'toFixed(3)')
         self.assertContains(response, 'Adicionar acorde')
         self.assertContains(response, 'Exportar PDF')
         self.assertContains(response, reverse('music:export_pdf', args=[self.project.pk]))
+        self.assertContains(response, 'Exportar para MuseScore (.musicxml)')
+        self.assertContains(response, reverse('music:export_musicxml', args=[self.project.pk]))
+        self.assertContains(response, 'exportButtons')
 
     def test_pdf_score_data_applies_manual_chords_without_mutating_detected_data(self):
         score = Score.objects.create(
@@ -698,6 +713,40 @@ class ProjectReprocessTests(TestCase):
         self.assertEqual(editor_data['structure']['measures'][0]['chords'][0]['chord_name'], 'N.C.')
         self.assertEqual(pdf_data['structure']['measures'][0]['chords'][0]['chord_name'], 'N.C.')
 
+    def test_manual_header_edits_overlay_editor_and_pdf_without_mutating_score_data(self):
+        score = Score.objects.create(
+            music_project=self.project,
+            data={
+                'title': 'Titulo detectado',
+                'artist': 'Artista detectado',
+                'key': 'C',
+                'bpm': 65,
+                'structure': {'measures': []},
+            },
+            manual_chord_edits={
+                'manual_header_edits': {
+                    'title': 'Titulo manual',
+                    'artist': 'Artista manual',
+                    'key': 'F#m',
+                    'bpm': 72.5,
+                },
+            },
+        )
+
+        editor_data = score_data_with_manual_chord_edits(score)
+        pdf_data = pdf_score_data(self.project, score)
+
+        self.assertEqual(
+            [editor_data[field_name] for field_name in ('title', 'artist', 'key', 'bpm')],
+            ['Titulo manual', 'Artista manual', 'F#m', 72.5],
+        )
+        self.assertEqual(
+            [pdf_data[field_name] for field_name in ('title', 'artist', 'key', 'bpm')],
+            ['Titulo manual', 'Artista manual', 'F#m', 72.5],
+        )
+        self.assertEqual(score.data['title'], 'Titulo detectado')
+        self.assertEqual(score.data['key'], 'C')
+
     def test_manual_position_moves_detected_chord_without_mutating_detected_data(self):
         score = Score.objects.create(
             music_project=self.project,
@@ -817,6 +866,113 @@ class ProjectReprocessTests(TestCase):
             'Am7',
         )
 
+    def test_owner_can_export_current_edited_score_as_valid_musicxml(self):
+        score = Score.objects.create(
+            music_project=self.project,
+            data={
+                'title': 'Sou Casa',
+                'artist': 'Artista original',
+                'key': 'F',
+                'bpm': 65,
+                'chords': [],
+                'structure': {
+                    'time_signature': {'beats_per_measure': 4, 'beat_unit': 4},
+                    'measures': [{
+                        'number': 1,
+                        'chords': [
+                            {'chord_name': 'F', 'beat_start': 0, 'beat_duration': 2},
+                            {'chord_name': 'C', 'beat_start': 2, 'beat_duration': 2},
+                        ],
+                    }],
+                },
+            },
+            manual_chord_edits={
+                'manual_header_edits': {
+                    'title': 'Sou Casa Editada',
+                    'artist': 'Artista manual',
+                    'key': 'Bb',
+                    'bpm': 72.5,
+                },
+                'chords': {
+                    '1:0': {
+                        'chord_name': 'Am7',
+                        'beat_start': 0.437123456789 * 4,
+                        'position_ratio': 0.437123456789,
+                    },
+                },
+                'deleted_chords': {'1:1': True},
+                'added_chords': {
+                    '1:3': {
+                        'chord_name': 'D/F#',
+                        'beat_start': 0.82 * 4,
+                        'position_ratio': 0.82,
+                    },
+                },
+            },
+        )
+        original_data = deepcopy(score.data)
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse('music:export_musicxml', args=[self.project.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/vnd.recordare.musicxml+xml')
+        self.assertIn('attachment;', response['Content-Disposition'])
+        self.assertIn('sou-casa-editada.musicxml', response['Content-Disposition'])
+        xml = b''.join(response.streaming_content).decode('utf-8')
+        root = ET.fromstring(xml)
+        self.assertEqual(root.tag, 'score-partwise')
+        self.assertEqual(root.findtext('./work/work-title'), 'Sou Casa Editada')
+        self.assertEqual(root.findtext('./identification/creator'), 'Artista manual')
+
+        first_measure = root.find('./part/measure')
+        self.assertEqual(first_measure.findtext('./attributes/divisions'), str(MUSICXML_DIVISIONS))
+        self.assertEqual(first_measure.findtext('./attributes/time/beats'), '4')
+        self.assertEqual(first_measure.findtext('./attributes/time/beat-type'), '4')
+        self.assertEqual(first_measure.findtext('./attributes/key/fifths'), '-2')
+        self.assertEqual(first_measure.find('./direction/sound').get('tempo'), '72.5')
+
+        harmonies = first_measure.findall('./harmony')
+        self.assertEqual([harmony.findtext('./root/root-step') for harmony in harmonies], ['A', 'D'])
+        self.assertEqual(harmonies[0].findtext('./kind'), 'minor-seventh')
+        self.assertEqual(harmonies[1].findtext('./bass/bass-step'), 'F')
+        self.assertEqual(harmonies[1].findtext('./bass/bass-alter'), '1')
+
+        cursor_ticks = 0
+        harmony_positions = []
+        for child in first_measure:
+            if child.tag == 'forward':
+                cursor_ticks += int(child.findtext('./duration'))
+            elif child.tag == 'harmony':
+                harmony_positions.append(cursor_ticks)
+        self.assertEqual(
+            harmony_positions,
+            [
+                round(0.437123456789 * 4 * MUSICXML_DIVISIONS),
+                round(0.82 * 4 * MUSICXML_DIVISIONS),
+            ],
+        )
+        score.refresh_from_db()
+        self.assertEqual(score.data, original_data)
+
+    def test_other_user_cannot_export_project_musicxml(self):
+        Score.objects.create(
+            music_project=self.project,
+            data={
+                'title': 'Private Score',
+                'structure': {'measures': [{'number': 1, 'chords': []}]},
+            },
+        )
+        other_user = get_user_model().objects.create_user(
+            email='other-musicxml@harmix.test',
+            password='test-pass-123',
+        )
+        self.client.force_login(other_user)
+
+        response = self.client.get(reverse('music:export_musicxml', args=[self.project.pk]))
+
+        self.assertEqual(response.status_code, 404)
+
     def test_score_edit_page_rejects_post_requests(self):
         Score.objects.create(music_project=self.project, data={})
         self.client.force_login(self.user)
@@ -903,6 +1059,71 @@ class ProjectReprocessTests(TestCase):
         pdf_chord = pdf_score_data(self.project, score)['structure']['measures'][0]['chords'][0]
         pdf_center_beat = pdf_chord['beat_start'] + (pdf_chord['beat_duration'] / 2)
         self.assertAlmostEqual(pdf_center_beat, 0.437123456789 * 4, places=9)
+
+    def test_owner_can_save_manual_header_edits_without_changing_original_data(self):
+        score = Score.objects.create(
+            music_project=self.project,
+            data={
+                'title': 'Titulo detectado',
+                'artist': 'Artista detectado',
+                'key': 'C',
+                'bpm': 65,
+                'structure': {'measures': []},
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse('music:score_chord_edits', args=[self.project.pk]),
+            data=json.dumps({
+                'changes': [],
+                'header_edits': {
+                    'title': 'Titulo manual',
+                    'artist': 'Artista manual',
+                    'key': 'Bb',
+                    'bpm': 72.5,
+                },
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['saved_header_edits'], 4)
+        score.refresh_from_db()
+        self.assertEqual(
+            score.manual_chord_edits['manual_header_edits'],
+            {'title': 'Titulo manual', 'artist': 'Artista manual', 'key': 'Bb', 'bpm': 72.5},
+        )
+        self.assertEqual(score.data['title'], 'Titulo detectado')
+        self.assertEqual(score.data['bpm'], 65)
+        self.assertEqual(pdf_score_data(self.project, score)['title'], 'Titulo manual')
+
+    def test_manual_header_edits_reject_invalid_key_and_bpm(self):
+        Score.objects.create(
+            music_project=self.project,
+            data={'structure': {'measures': []}},
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse('music:score_chord_edits', args=[self.project.pk]),
+            data=json.dumps({
+                'changes': [],
+                'header_edits': {'key': 'H7'},
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+        response = self.client.post(
+            reverse('music:score_chord_edits', args=[self.project.pk]),
+            data=json.dumps({
+                'changes': [],
+                'header_edits': {'bpm': 0},
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
 
     def test_continuous_detected_position_may_overlap_an_existing_beat(self):
         Score.objects.create(

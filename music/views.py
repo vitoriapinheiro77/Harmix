@@ -10,6 +10,7 @@ from django.contrib.auth.decorators import login_required
 from django.db import transaction
 from django.http import FileResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils.text import slugify
 from django.views.decorators.http import require_GET, require_POST
 
 from .forms import MusicProjectUploadForm
@@ -17,6 +18,8 @@ from .models import MusicProject, Score
 from .utils import (
     delete_project_files,
     enqueue_project_reprocessing,
+    generate_score_musicxml,
+    musicxml_score_data,
     regenerate_score_pdf,
     score_data_with_manual_chord_edits,
 )
@@ -29,6 +32,22 @@ CHORD_NAME_PATTERN = re.compile(
     r'(?:\((?:[#b]?(?:5|9|11|13))(?:,[#b]?(?:5|9|11|13))*\))?'
     r'(?:/[A-G](?:#|b)?)?)$'
 )
+KEY_NAME_PATTERN = re.compile(r'^[A-G](?:#|b)?m?$')
+
+
+def _score_header_values(project, score_data):
+    """Return the score header, falling back to project metadata when needed."""
+    score_data = score_data or {}
+    title = score_data.get('title') or project.title
+    artist = score_data.get('artist') or project.artist or 'Harmix'
+    key = score_data.get('key') or project.key or '-'
+    bpm = score_data.get('bpm') or project.bpm or '-'
+    return {
+        'title': str(title),
+        'artist': str(artist),
+        'key': str(key),
+        'bpm': bpm,
+    }
 
 
 def _normalized_manual_beat_start(value):
@@ -169,6 +188,41 @@ def export_pdf_view(request, pk):
 
 @login_required
 @require_GET
+def export_musicxml_view(request, pk):
+    project = get_object_or_404(
+        MusicProject.objects.select_related('score'),
+        pk=pk,
+        user=request.user,
+    )
+    try:
+        score = project.score
+    except Score.DoesNotExist:
+        messages.error(request, 'A partitura ainda nao foi gerada para este projeto.')
+        return redirect('music:project_detail', pk=project.pk)
+
+    if project.status != MusicProject.Status.DONE:
+        messages.error(request, 'O projeto ainda nao foi processado completamente.')
+        return redirect('music:project_detail', pk=project.pk)
+
+    try:
+        xml = generate_score_musicxml(project, score)
+        score_data = musicxml_score_data(project, score)
+    except Exception:
+        logger.exception('Falha ao exportar MusicXML do projeto %s', project.pk)
+        messages.error(request, 'Nao foi possivel gerar o MusicXML agora. Tente novamente.')
+        return redirect('music:score_edit', pk=project.pk)
+
+    filename = slugify(score_data.get('title') or project.title) or 'partitura'
+    return FileResponse(
+        BytesIO(xml.encode('utf-8')),
+        content_type='application/vnd.recordare.musicxml+xml',
+        as_attachment=True,
+        filename=f'{filename}.musicxml',
+    )
+
+
+@login_required
+@require_GET
 def score_edit_view(request, pk):
     project = get_object_or_404(
         MusicProject.objects.select_related('score'),
@@ -182,6 +236,8 @@ def score_edit_view(request, pk):
         return redirect('music:project_detail', pk=project.pk)
 
     score_data = score_data_with_manual_chord_edits(score, include_editor_metadata=True)
+    header_values = _score_header_values(project, score_data)
+    header_original_values = _score_header_values(project, score.data)
     return render(
         request,
         'music/score_edit.html',
@@ -189,6 +245,8 @@ def score_edit_view(request, pk):
             'project': project,
             'score': score,
             'score_data': score_data,
+            'header_values': header_values,
+            'header_original_values': header_original_values,
             'chords': score_data.get('chords', []),
         },
     )
@@ -226,14 +284,39 @@ def score_chord_edits_view(request, pk):
     added_chords = payload.get('added_chords', []) if isinstance(payload, dict) else None
     deleted_chords = payload.get('deleted_chords', []) if isinstance(payload, dict) else None
     deleted_added_chords = payload.get('deleted_added_chords', []) if isinstance(payload, dict) else None
+    header_edits = payload.get('header_edits', {}) if isinstance(payload, dict) else None
     if (
         not isinstance(changes, list)
         or not isinstance(added_chords, list)
         or not isinstance(deleted_chords, list)
         or not isinstance(deleted_added_chords, list)
-        or len(changes) + len(added_chords) + len(deleted_chords) + len(deleted_added_chords) > 100
+        or not isinstance(header_edits, dict)
+        or len(changes) + len(added_chords) + len(deleted_chords) + len(deleted_added_chords) + len(header_edits) > 104
     ):
         return JsonResponse({'error': 'Lista de alteracoes invalida.'}, status=400)
+
+    if set(header_edits) - {'title', 'artist', 'key', 'bpm'}:
+        return JsonResponse({'error': 'Alteracao de cabecalho invalida.'}, status=400)
+    validated_header_edits = {}
+    for field_name, value in header_edits.items():
+        if field_name in {'title', 'artist'}:
+            if not isinstance(value, str) or not value.strip() or len(value.strip()) > 255:
+                return JsonResponse({'error': 'Titulo ou artista invalido.'}, status=400)
+            validated_header_edits[field_name] = value.strip()
+        elif field_name == 'key':
+            if not isinstance(value, str) or not KEY_NAME_PATTERN.fullmatch(value.strip()):
+                return JsonResponse({'error': 'Tom musical invalido.'}, status=400)
+            validated_header_edits[field_name] = value.strip()
+        else:
+            if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+                return JsonResponse({'error': 'BPM invalido.'}, status=400)
+            try:
+                bpm = float(value)
+            except (TypeError, ValueError):
+                return JsonResponse({'error': 'BPM invalido.'}, status=400)
+            if not math.isfinite(bpm) or not 0 < bpm <= 999:
+                return JsonResponse({'error': 'BPM invalido.'}, status=400)
+            validated_header_edits['bpm'] = int(bpm) if bpm.is_integer() else bpm
 
     detected_chords = _detected_chord_lookup(score)
     detected_beat_starts = {}
@@ -345,6 +428,21 @@ def score_chord_edits_view(request, pk):
         )
 
     manual_edits = dict(score.manual_chord_edits or {})
+    stored_header_edits = dict(manual_edits.get('manual_header_edits') or {})
+    original_header_values = _score_header_values(project, score.data)
+    for field_name, value in validated_header_edits.items():
+        original_value = original_header_values[field_name]
+        if field_name == 'bpm':
+            try:
+                matches_original = float(value) == float(original_value)
+            except (TypeError, ValueError):
+                matches_original = False
+        else:
+            matches_original = value == original_value
+        if matches_original:
+            stored_header_edits.pop(field_name, None)
+        else:
+            stored_header_edits[field_name] = value
     chord_edits = dict(manual_edits.get('chords') or {})
     stored_deleted_chords = dict(manual_edits.get('deleted_chords') or {})
     stored_deleted_chords.update({key: True for key in deleted_chord_keys})
@@ -465,6 +563,7 @@ def score_chord_edits_view(request, pk):
         }
         if position_ratio is not None:
             stored_added_chords[manual_chord_id]['position_ratio'] = position_ratio
+    manual_edits['manual_header_edits'] = stored_header_edits
     manual_edits['chords'] = chord_edits
     manual_edits['added_chords'] = stored_added_chords
     manual_edits['deleted_chords'] = stored_deleted_chords
@@ -475,6 +574,7 @@ def score_chord_edits_view(request, pk):
         'saved_added_chords': len(validated_added_chords),
         'saved_deleted_chords': len(validated_deleted_chords),
         'saved_deleted_added_chords': len(deleted_added_chord_ids),
+        'saved_header_edits': len(validated_header_edits),
     })
 
 

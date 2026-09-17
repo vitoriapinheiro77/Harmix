@@ -26,6 +26,32 @@
     }
     .score-sheet-header strong { font-size: 1.65rem; text-align: center; }
     .score-sheet-header span:last-child { text-align: right; }
+    .score-header-editable {
+        display: inline-block;
+        cursor: text;
+        border-bottom: 1px dashed transparent;
+        transition: border-color 120ms ease, color 120ms ease;
+    }
+    .score-header-editable:hover, .score-header-editable:focus {
+        color: #9c3d20;
+        border-bottom-color: currentColor;
+        outline: none;
+    }
+    .score-header-edit-input {
+        box-sizing: border-box;
+        min-width: 3.6rem;
+        margin: -0.15rem 0;
+        padding: 0.12rem 0.3rem;
+        color: inherit;
+        background: #fffdf8;
+        border: 1px solid #9c3d20;
+        border-radius: 0.2rem;
+        font: inherit;
+    }
+    .score-header-title-input { width: min(100%, 28rem); text-align: center; font-weight: 700; }
+    .score-header-artist-input { width: min(100%, 15rem); text-align: right; }
+    .score-header-key-input { width: 3.6rem; text-align: center; }
+    .score-header-bpm-input { width: 4.5rem; text-align: center; }
     .score-visual { min-width: 44rem; }
     .score-system { display: block; width: 100%; min-width: 44rem; margin: 0 0 1.7rem; }
     .score-staff-line, .score-bar-line, .score-rhythm-slash { stroke: #1c1a17; }
@@ -121,6 +147,7 @@
                 <div class="score-editor-actions">
                     <button id="saveChordChanges" class="project-button primary" type="button" disabled>Salvar altera&ccedil;&otilde;es</button>
                     <a id="exportScorePdf" class="project-button ghost" href="{% url 'music:export_pdf' project.pk %}" target="_blank" rel="noopener noreferrer">Exportar PDF</a>
+                    <a id="exportScoreMusicXml" class="project-button ghost" href="{% url 'music:export_musicxml' project.pk %}">Exportar para MuseScore (.musicxml)</a>
                     <a class="project-button ghost" href="{% url 'music:project_detail' project.pk %}">Voltar ao projeto</a>
                     <p id="scoreSaveStatus" class="score-save-status" role="status" aria-live="polite"></p>
                 </div>
@@ -131,13 +158,14 @@
                 {% if score_data.structure.measures %}
                 <div class="score-sheet">
                     <div class="score-sheet-header">
-                        <span>Tom: {{ score_data.key|default:project.key|default:"-" }} &nbsp; BPM: {{ score_data.bpm|default:project.bpm|default:"-" }}</span>
-                        <strong>{{ score_data.title|default:project.title }}</strong>
-                        <span>{{ score_data.artist|default:"Harmix" }}</span>
+                        <span>Tom: <span id="scoreHeaderKey" class="score-header-editable" role="button" tabindex="0" data-header-field="key">{{ header_values.key }}</span> &nbsp; BPM: <span id="scoreHeaderBpm" class="score-header-editable" role="button" tabindex="0" data-header-field="bpm">{{ header_values.bpm }}</span></span>
+                        <strong><span id="scoreHeaderTitle" class="score-header-editable" role="button" tabindex="0" data-header-field="title">{{ header_values.title }}</span></strong>
+                        <span><span id="scoreHeaderArtist" class="score-header-editable" role="button" tabindex="0" data-header-field="artist">{{ header_values.artist }}</span></span>
                     </div>
                     <div id="scoreVisual" class="score-visual" aria-label="Partitura em SVG"></div>
                 </div>
                 {{ score_data.structure.measures|json_script:"scoreMeasuresData" }}
+                {{ header_original_values|json_script:"scoreHeaderOriginalData" }}
                 {% else %}
                 <div class="empty-state"><span class="feature-icon">M</span><h3>Compassos indisponiveis</h3><p>Processe a musica para gerar a partitura visual.</p></div>
                 {% endif %}
@@ -151,16 +179,21 @@
     (function () {
         const svgNamespace = 'http://www.w3.org/2000/svg';
         const measuresElement = document.getElementById('scoreMeasuresData');
+        const headerOriginalElement = document.getElementById('scoreHeaderOriginalData');
         const visual = document.getElementById('scoreVisual');
         const measures = JSON.parse(measuresElement.textContent || '[]');
+        const headerOriginalValues = JSON.parse(headerOriginalElement.textContent || '{}');
         const beatsPerMeasure = 4;
         const measuresPerSystem = 4;
         const sheet = document.querySelector('.score-sheet');
         const saveButton = document.getElementById('saveChordChanges');
         const exportButton = document.getElementById('exportScorePdf');
+        const musicXmlExportButton = document.getElementById('exportScoreMusicXml');
+        const exportButtons = [exportButton, musicXmlExportButton];
         const saveStatus = document.getElementById('scoreSaveStatus');
         const saveButtonLabel = 'Salvar altera\u00e7\u00f5es';
         const chordNamePattern = /^(?:N\.C\.|[A-G](?:#|b)?(?:(?:(?:maj|min|m|dim|aug|add)?(?:[0-9]{1,2}|6\/9)?|(?:[0-9]{1,2})?sus(?:2|4)?))?(?:\((?:[#b]?(?:5|9|11|13))(?:,[#b]?(?:5|9|11|13))*\))?(?:\/[A-G](?:#|b)?)?)$/;
+        const keyNamePattern = /^[A-G](?:#|b)?m?$/;
         const pendingChanges = new Map();
         let selectedSymbol = null;
         let selectedMeasureNumber = null;
@@ -222,13 +255,15 @@
             saveButton.disabled = !hasPendingChanges;
             saveButton.textContent = saveButtonLabel;
             saveButton.removeAttribute('aria-busy');
-            exportButton.classList.toggle('is-disabled', hasPendingChanges);
-            exportButton.setAttribute('aria-disabled', hasPendingChanges ? 'true' : 'false');
-            if (hasPendingChanges) {
-                exportButton.setAttribute('tabindex', '-1');
-            } else {
-                exportButton.removeAttribute('tabindex');
-            }
+            exportButtons.forEach(function (button) {
+                button.classList.toggle('is-disabled', hasPendingChanges);
+                button.setAttribute('aria-disabled', hasPendingChanges ? 'true' : 'false');
+                if (hasPendingChanges) {
+                    button.setAttribute('tabindex', '-1');
+                } else {
+                    button.removeAttribute('tabindex');
+                }
+            });
             if (showPendingStatus) {
                 setSaveStatus(
                     pendingChanges.size ? pendingChanges.size + ' alteracao(oes) pendente(s).' : '',
@@ -236,6 +271,109 @@
                 );
             }
         }
+
+        function headerInputClass(fieldName) {
+            return 'score-header-edit-input score-header-' + fieldName + '-input';
+        }
+
+        function validateHeaderValue(fieldName, value) {
+            const normalized = value.trim();
+            if ((fieldName === 'title' || fieldName === 'artist') && normalized && normalized.length <= 255) {
+                return { value: normalized, display: normalized };
+            }
+            if (fieldName === 'key' && keyNamePattern.test(normalized)) {
+                return { value: normalized, display: normalized };
+            }
+            if (fieldName === 'bpm') {
+                const bpm = Number(normalized);
+                if (normalized && Number.isFinite(bpm) && bpm > 0 && bpm <= 999) {
+                    return { value: bpm, display: String(bpm) };
+                }
+            }
+            return null;
+        }
+
+        function restoreHeaderElement(element, input, value) {
+            element.textContent = value;
+            input.replaceWith(element);
+            element.focus();
+        }
+
+        function commitHeaderEdit(element, input) {
+            const fieldName = element.dataset.headerField;
+            const result = validateHeaderValue(fieldName, input.value);
+            if (!result) {
+                input.setCustomValidity(
+                    fieldName === 'key' ? 'Informe um tom valido, como C, Bb ou F#m.'
+                        : fieldName === 'bpm' ? 'Informe um BPM positivo de ate 999.'
+                            : 'Informe um texto valido.',
+                );
+                input.reportValidity();
+                return;
+            }
+            input.setCustomValidity('');
+            const originalValue = headerOriginalValues[fieldName];
+            const matchesOriginal = fieldName === 'bpm'
+                ? Number(result.value) === Number(originalValue)
+                : result.value === String(originalValue);
+            if (matchesOriginal) {
+                pendingChanges.delete('header:' + fieldName);
+            } else {
+                pendingChanges.set('header:' + fieldName, {
+                    kind: 'header',
+                    field: fieldName,
+                    value: result.value,
+                });
+            }
+            restoreHeaderElement(element, input, result.display);
+            updateSaveButton(true);
+        }
+
+        function openHeaderEditor(element) {
+            if (element.dataset.editing === 'true') {
+                return;
+            }
+            const fieldName = element.dataset.headerField;
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = headerInputClass(fieldName);
+            input.value = element.textContent.trim();
+            input.maxLength = fieldName === 'bpm' ? 8 : 255;
+            input.inputMode = fieldName === 'bpm' ? 'decimal' : 'text';
+            input.setAttribute('aria-label', 'Editar ' + fieldName);
+            element.dataset.editing = 'true';
+            input.addEventListener('input', function () { input.setCustomValidity(''); });
+            input.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    element.dataset.editing = 'false';
+                    commitHeaderEdit(element, input);
+                } else if (event.key === 'Escape') {
+                    event.preventDefault();
+                    element.dataset.editing = 'false';
+                    restoreHeaderElement(element, input, element.textContent);
+                }
+            });
+            input.addEventListener('blur', function () {
+                if (element.dataset.editing === 'true') {
+                    element.dataset.editing = 'false';
+                    restoreHeaderElement(element, input, element.textContent);
+                }
+            });
+            element.replaceWith(input);
+            input.focus();
+            input.select();
+        }
+
+        document.querySelectorAll('.score-header-editable').forEach(function (element) {
+            element.addEventListener('click', function () { openHeaderEditor(element); });
+            element.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openHeaderEditor(element);
+                }
+            });
+        });
 
         function closeEditor() {
             if (editor) {
@@ -662,6 +800,7 @@
                 const addedChords = [];
                 const deletedChords = [];
                 const deletedAddedChords = [];
+                const headerEdits = {};
                 pendingChanges.forEach(function (change) {
                     if (change.kind === 'added') {
                         addedChords.push({
@@ -678,6 +817,8 @@
                         });
                     } else if (change.kind === 'deleted-added') {
                         deletedAddedChords.push(change.manual_chord_id);
+                    } else if (change.kind === 'header') {
+                        headerEdits[change.field] = change.value;
                     } else {
                         changes.push({
                             measure_number: change.measure_number,
@@ -700,6 +841,7 @@
                         added_chords: addedChords,
                         deleted_chords: deletedChords,
                         deleted_added_chords: deletedAddedChords,
+                        header_edits: headerEdits,
                     }),
                 });
                 const result = await response.json().catch(function () { return {}; });
@@ -721,6 +863,9 @@
                         return;
                     }
                     if (change.kind === 'deleted' || change.kind === 'deleted-added') {
+                        return;
+                    }
+                    if (change.kind === 'header') {
                         return;
                     }
                     const symbol = document.querySelector('[data-measure-number="' + change.measure_number + '"][data-chord-index="' + change.chord_index + '"]');

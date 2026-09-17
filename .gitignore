@@ -28,3 +28,7 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Arquivos locais da documentação/TCC
+output/tcc/
+tmp/tcc/

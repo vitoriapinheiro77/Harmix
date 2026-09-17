@@ -118,12 +118,22 @@ def score_data_with_manual_chord_edits(score, *, include_editor_metadata=False):
     """Apply manual chord labels, insertions, and deletions to a detected-score copy."""
     score_data = deepcopy(score.data or {})
     manual_edits = score.manual_chord_edits or {}
+    manual_header_edits = manual_edits.get('manual_header_edits', {})
     chord_edits = manual_edits.get('chords', {})
     added_chords = manual_edits.get('added_chords', {})
     deleted_chords = manual_edits.get('deleted_chords', {})
+    manual_header_edits = manual_header_edits if isinstance(manual_header_edits, dict) else {}
     chord_edits = chord_edits if isinstance(chord_edits, dict) else {}
     added_chords = added_chords if isinstance(added_chords, dict) else {}
     deleted_chords = deleted_chords if isinstance(deleted_chords, dict) else {}
+
+    for field_name in ('title', 'artist', 'key'):
+        value = manual_header_edits.get(field_name)
+        if isinstance(value, str):
+            score_data[field_name] = value
+    bpm = manual_header_edits.get('bpm')
+    if isinstance(bpm, (int, float)) and not isinstance(bpm, bool) and math.isfinite(float(bpm)):
+        score_data['bpm'] = bpm
 
     for measure in score_data.get('structure', {}).get('measures', []):
         measure_number = measure.get('number')
@@ -225,6 +235,23 @@ def pdf_score_data(project, score):
     artist = (score_data.get('artist') or '').strip()
     score_data['artist'] = artist or PDF_DEFAULT_ARTIST
     return score_data
+
+
+def musicxml_score_data(project, score):
+    """Return an overlaid score copy suitable for a fresh MusicXML export."""
+    score_data = score_data_with_manual_chord_edits(score)
+    score_data['title'] = score_data.get('title') or project.title or 'Harmix Score'
+    score_data['artist'] = score_data.get('artist') or project.artist or 'Harmix'
+    score_data['key'] = score_data.get('key') or project.key or 'C'
+    score_data['bpm'] = score_data.get('bpm') or project.bpm or 120
+    return score_data
+
+
+def generate_score_musicxml(project, score):
+    """Generate MusicXML from saved score data plus all manual editor overlays."""
+    from .musicxml import render_musicxml
+
+    return render_musicxml(musicxml_score_data(project, score))
 
 
 def score_has_pdf_data(score):
