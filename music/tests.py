@@ -17,7 +17,7 @@ from .models import MusicProject, Score, Track
 from .pipeline import HarmixPipeline
 from .separation import SeparationError, run_demucs, select_chord_source
 from .structure import MusicalStructureBuilder, build_musical_structure
-from .musicxml import MUSICXML_DIVISIONS
+from .musicxml import MEASURES_PER_SYSTEM, MUSICXML_DIVISIONS, render_musicxml
 from .utils import (
     enqueue_project_reprocessing,
     pdf_score_data,
@@ -931,6 +931,15 @@ class ProjectReprocessTests(TestCase):
         self.assertEqual(first_measure.findtext('./attributes/time/beat-type'), '4')
         self.assertEqual(first_measure.findtext('./attributes/key/fifths'), '-2')
         self.assertEqual(first_measure.find('./direction/sound').get('tempo'), '72.5')
+        slash_notes = first_measure.findall('./note')
+        self.assertEqual(len(slash_notes), 4)
+        self.assertFalse(first_measure.findall('./note/rest'))
+        for note in slash_notes:
+            self.assertEqual(note.findtext('./unpitched/display-step'), 'B')
+            self.assertEqual(note.findtext('./duration'), str(MUSICXML_DIVISIONS))
+            self.assertEqual(note.findtext('./type'), 'quarter')
+            self.assertEqual(note.findtext('./stem'), 'none')
+            self.assertEqual(note.findtext('./notehead'), 'slash')
 
         harmonies = first_measure.findall('./harmony')
         self.assertEqual([harmony.findtext('./root/root-step') for harmony in harmonies], ['A', 'D'])
@@ -954,6 +963,61 @@ class ProjectReprocessTests(TestCase):
         )
         score.refresh_from_db()
         self.assertEqual(score.data, original_data)
+
+    def test_musicxml_uses_slashes_and_starts_a_new_system_every_four_measures(self):
+        score_data = {
+            'title': 'Layout test',
+            'artist': 'Harmix Artist',
+            'key': 'C',
+            'bpm': 65,
+            'structure': {
+                'time_signature': {'beats_per_measure': 4, 'beat_unit': 4},
+                'measures': [
+                    {
+                        'number': number,
+                        'chords': [{'chord_name': 'F', 'beat_start': 0, 'beat_duration': 4}],
+                    }
+                    for number in range(1, 10)
+                ],
+            },
+        }
+
+        root = ET.fromstring(render_musicxml(score_data))
+        measures = root.findall('./part/measure')
+
+        self.assertEqual(len(measures), 9)
+        self.assertEqual(
+            [measure.get('number') for measure in measures],
+            [str(number) for number in range(1, 10)],
+        )
+        self.assertEqual(measures[0].findtext('./print/measure-numbering'), 'none')
+        self.assertEqual(root.findtext('./work/work-title'), 'Layout test')
+        self.assertEqual(root.findtext('./identification/creator'), 'Harmix Artist')
+        self.assertIsNone(root.find('./credit'))
+        self.assertEqual(measures[0].findtext('./attributes/time/beats'), '4')
+        self.assertEqual(measures[0].findtext('./attributes/time/beat-type'), '4')
+        self.assertEqual(measures[0].findtext('./attributes/key/fifths'), '0')
+        self.assertEqual(measures[0].find('./direction/sound').get('tempo'), '65')
+
+        for measure in measures:
+            notes = measure.findall('./note')
+            self.assertEqual(len(notes), 4)
+            self.assertFalse(measure.findall('./note/rest'))
+            self.assertTrue(all(note.findtext('./notehead') == 'slash' for note in notes))
+
+        system_break_numbers = [
+            int(measure.get('number'))
+            for measure in measures
+            if measure.find('./print[@new-system="yes"]') is not None
+        ]
+        self.assertEqual(system_break_numbers, [MEASURES_PER_SYSTEM + 1, (MEASURES_PER_SYSTEM * 2) + 1])
+        self.assertTrue(
+            all(
+                measure.findtext('./print/measure-numbering') == 'none'
+                for measure in measures
+                if measure.find('./print[@new-system="yes"]') is not None
+            )
+        )
 
     def test_other_user_cannot_export_project_musicxml(self):
         Score.objects.create(

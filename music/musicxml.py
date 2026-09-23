@@ -4,6 +4,7 @@ from xml.etree import ElementTree as ET
 
 
 MUSICXML_DIVISIONS = 10080
+MEASURES_PER_SYSTEM = 4
 
 _KEY_FIFTHS = {
     'Cb': -7, 'Gb': -6, 'Db': -5, 'Ab': -4, 'Eb': -3, 'Bb': -2, 'F': -1,
@@ -136,12 +137,42 @@ def _beat_position(chord, beats_per_measure):
     return max(0.0, min(float(beats_per_measure), beat_start))
 
 
+def _note_type_for_beat_type(beat_type):
+    return {
+        1: 'whole',
+        2: 'half',
+        4: 'quarter',
+        8: 'eighth',
+        16: '16th',
+        32: '32nd',
+    }.get(beat_type, 'quarter')
+
+
+def _append_rhythmic_slashes(measure_element, beats, beat_type):
+    """Write one slash-note per beat instead of a visible measure rest."""
+    beat_ticks = int(round((4 / beat_type) * MUSICXML_DIVISIONS))
+    note_type = _note_type_for_beat_type(beat_type)
+    for _ in range(beats):
+        note = ET.SubElement(measure_element, 'note')
+        unpitched = ET.SubElement(note, 'unpitched')
+        _add_text(unpitched, 'display-step', 'B')
+        _add_text(unpitched, 'display-octave', 4)
+        _add_text(note, 'duration', beat_ticks)
+        _add_text(note, 'voice', 1)
+        _add_text(note, 'type', note_type)
+        _add_text(note, 'stem', 'none')
+        _add_text(note, 'notehead', 'slash')
+
+
 def _append_measure(part, measure, measure_index, beats, beat_type, key_name, bpm):
     measure_element = ET.SubElement(part, 'measure', {'number': str(measure.get('number') or measure_index)})
     quarter_beats_per_measure = beats * (4 / beat_type)
     measure_ticks = int(round(quarter_beats_per_measure * MUSICXML_DIVISIONS))
 
     if measure_index == 1:
+        initial_print = ET.SubElement(measure_element, 'print')
+        _add_text(initial_print, 'measure-numbering', 'none')
+
         attributes = ET.SubElement(measure_element, 'attributes')
         _add_text(attributes, 'divisions', MUSICXML_DIVISIONS)
         key = ET.SubElement(attributes, 'key')
@@ -160,6 +191,12 @@ def _append_measure(part, measure, measure_index, beats, beat_type, key_name, bp
         _add_text(metronome, 'beat-unit', 'quarter')
         _add_text(metronome, 'per-minute', bpm)
         ET.SubElement(direction, 'sound', {'tempo': str(bpm)})
+
+    if measure_index > 1 and (measure_index - 1) % MEASURES_PER_SYSTEM == 0:
+        print_element = ET.SubElement(measure_element, 'print', {'new-system': 'yes'})
+        system_layout = ET.SubElement(print_element, 'system-layout')
+        _add_text(system_layout, 'system-distance', 140)
+        _add_text(print_element, 'measure-numbering', 'none')
 
     cursor_ticks = 0
     chords = sorted(
@@ -180,10 +217,7 @@ def _append_measure(part, measure, measure_index, beats, beat_type, key_name, bp
         backup = ET.SubElement(measure_element, 'backup')
         _add_text(backup, 'duration', cursor_ticks)
 
-    note = ET.SubElement(measure_element, 'note')
-    ET.SubElement(note, 'rest', {'measure': 'yes'})
-    _add_text(note, 'duration', measure_ticks)
-    _add_text(note, 'voice', 1)
+    _append_rhythmic_slashes(measure_element, beats, beat_type)
 
 
 def render_musicxml(score_data):
@@ -205,9 +239,6 @@ def render_musicxml(score_data):
     _add_text(identification, 'creator', artist, {'type': 'composer'})
     encoding = ET.SubElement(identification, 'encoding')
     _add_text(encoding, 'software', 'Harmix')
-    credit = ET.SubElement(root, 'credit', {'page': '1'})
-    _add_text(credit, 'credit-words', artist, {'justify': 'right', 'valign': 'top'})
-
     part_list = ET.SubElement(root, 'part-list')
     score_part = ET.SubElement(part_list, 'score-part', {'id': 'P1'})
     _add_text(score_part, 'part-name', 'Harmix Lead Sheet')
