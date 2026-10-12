@@ -1,4 +1,5 @@
 import logging
+from contextlib import nullcontext
 
 from .chordino_labels import chord_changes_to_events
 from .types import ChordAnalysisResult, ChordEvent
@@ -6,10 +7,16 @@ from .types import ChordAnalysisResult, ChordEvent
 logger = logging.getLogger('harmix.analysis')
 
 
-def detect_chords(audio_path, duration, fallback_fn):
+def _stage(diagnostics, name, details=None):
+    return diagnostics.stage(name, details=details) if diagnostics else nullcontext({})
+
+
+def detect_chords(audio_path, duration, fallback_fn, diagnostics=None):
     result = ChordAnalysisResult()
     try:
-        result = _detect_chords_chordino(audio_path, duration)
+        with _stage(diagnostics, 'chordino_detection') as metrics:
+            result = _detect_chords_chordino(audio_path, duration)
+            metrics['total_chords'] = len(result.chords)
         if result.chords:
             result.source = 'chordino'
             return result
@@ -19,7 +26,9 @@ def detect_chords(audio_path, duration, fallback_fn):
         result.errors.append(f'chordino: {exc}')
 
     try:
-        fallback_events = fallback_fn()
+        with _stage(diagnostics, 'librosa_chord_fallback') as metrics:
+            fallback_events = fallback_fn()
+            metrics['total_chords'] = len(fallback_events)
         result.chords = [
             ChordEvent(
                 start_time=item['start_time'],

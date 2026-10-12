@@ -3,6 +3,7 @@ import logging
 import math
 import shutil
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,7 @@ from .analysis.beat_detector import quantize_detections
 from .analysis.chord_stability import stabilize_chord_detections
 from .models import ChordSegment, MusicProject, Score, Track
 from .pdf_notation import draw_system_signature
+from .pipeline_diagnostics import PipelineDiagnostics
 from .separation import SeparationError, run_demucs, select_chord_source, stem_metrics
 from .structure import build_musical_structure
 from .utils import PDF_DEFAULT_ARTIST
@@ -61,17 +63,60 @@ class HarmixPipeline:
         self.workdir = Path(tempfile.mkdtemp(prefix=f'harmix_{project.pk}_'))
         self._pipeline_log = []
         self._rhythm_grid = None
+        self._diagnostics_active = False
+        self._diagnostics = PipelineDiagnostics(
+            project.pk,
+            on_change=self._persist_pipeline_diagnostics,
+        )
 
     def _log(self, step, details):
         """Append a debug entry that will be stored in score.data['pipeline_log']."""
         self._pipeline_log.append({'step': step, 'details': details})
+        if self._diagnostics_active:
+            self._diagnostics.event('checkpoint', stage=step, details=details)
+
+    def _stage(self, name, details=None):
+        if not self._diagnostics_active:
+            return nullcontext({})
+        return self._diagnostics.stage(name, details=details)
+
+    def _persist_pipeline_diagnostics(self, diagnostics):
+        score, _ = Score.objects.get_or_create(music_project=self.project)
+        score_data = dict(score.data or {})
+        score_data['pipeline_diagnostics'] = diagnostics
+        score_data['pipeline_log'] = list(self._pipeline_log)
+        score.data = score_data
+        score.save(update_fields=['data'])
 
     def run(self):
+        failure = None
+        self._diagnostics_active = True
+        self._diagnostics.start({
+            'project_id': self.project.pk,
+            'title': self.project.title,
+            'task_id': self.project.task_id,
+        })
         try:
             self._set_status(MusicProject.Status.ANALYZING, 'Copiando audio e detectando BPM e tonalidade.')
-            audio_path = self._prepare_audio()
-            rhythm_bpm, rhythm = run_rhythm_analysis(audio_path)
-            y, sr, bpm, key = self._analyze_audio(audio_path, rhythm_bpm=rhythm_bpm)
+            with self._stage('audio_preparation') as metrics:
+                audio_path = self._prepare_audio()
+                metrics.update({
+                    'file': audio_path.name,
+                    'size_bytes': audio_path.stat().st_size,
+                })
+            rhythm_bpm, rhythm = run_rhythm_analysis(
+                audio_path,
+                diagnostics=self._diagnostics,
+            )
+            with self._stage('audio_analysis') as metrics:
+                y, sr, bpm, key = self._analyze_audio(audio_path, rhythm_bpm=rhythm_bpm)
+                metrics.update({
+                    'sample_rate': sr,
+                    'audio_samples': len(y),
+                    'duration_seconds': round(len(y) / sr, 4),
+                    'bpm': bpm,
+                    'key': key,
+                })
             self._rhythm_grid = rhythm
             self.project.bpm = int(round(bpm)) if bpm else None
             self.project.key = key
@@ -105,13 +150,24 @@ class HarmixPipeline:
             self.project.error_message = ''
             self.project.save(update_fields=['status', 'processing_step', 'completed_at', 'error_message', 'updated_at'])
         except Exception as exc:
+            failure = exc
             self.project.status = MusicProject.Status.ERROR
             self.project.error_message = str(exc)
             self.project.processing_step = 'Erro durante o processamento.'
             self.project.save(update_fields=['status', 'error_message', 'processing_step', 'updated_at'])
             raise
         finally:
-            self._cleanup_workdir()
+            try:
+                with self._stage('temporary_cleanup') as metrics:
+                    metrics['workdir'] = str(self.workdir)
+                    self._cleanup_workdir()
+                    metrics['removed'] = not self.workdir.exists()
+            finally:
+                self._diagnostics.finish(
+                    'failed' if failure else 'completed',
+                    error=failure,
+                )
+                self._diagnostics_active = False
 
     def _set_status(self, status, step):
         self.project.status = status
@@ -214,7 +270,15 @@ class HarmixPipeline:
         import soundfile as sf
 
         self._delete_existing_tracks()
-        stems = run_demucs(audio_path, self.workdir / 'demucs')
+        with self._stage('demucs_separation', {'audio_file': audio_path.name}) as stage_metrics:
+            stems = run_demucs(audio_path, self.workdir / 'demucs')
+            stage_metrics['stems'] = {
+                name: {
+                    'path': str(path),
+                    'size_bytes': Path(path).stat().st_size,
+                }
+                for name, path in stems.items()
+            }
         stem_labels = {
             'vocals': ('Vozes', 'vocals.wav'),
             'drums': ('Bateria', 'drums.wav'),
@@ -224,23 +288,34 @@ class HarmixPipeline:
 
         generated_tracks = {}
         metrics = {}
-        for stem_name, (label, filename) in stem_labels.items():
-            stem_path = stems[stem_name]
-            audio, _ = librosa.load(stem_path, sr=sr, mono=True)
-            metrics[label] = stem_metrics(audio)
-            generated_tracks[label] = self._persist_track(label, stem_path, filename)
+        with self._stage('stem_analysis_persistence') as stage_metrics:
+            for stem_name, (label, filename) in stem_labels.items():
+                stem_path = stems[stem_name]
+                audio, _ = librosa.load(stem_path, sr=sr, mono=True)
+                metrics[label] = stem_metrics(audio)
+                generated_tracks[label] = self._persist_track(label, stem_path, filename)
+            stage_metrics.update({
+                'total_stems': len(generated_tracks),
+                'stem_metrics': metrics,
+            })
 
-        other_audio, _ = librosa.load(stems['other'], sr=sr, mono=True)
-        bass_audio, _ = librosa.load(stems['bass'], sr=sr, mono=True)
-        chord_audio, choice_debug = select_chord_source(other_audio, bass_audio)
-        chord_path = self.workdir / 'harmony_for_chords.wav'
-        sf.write(chord_path, chord_audio, sr)
-        harmony_track = self._persist_track(
-            'Harmonia para cifra',
-            chord_path,
-            'harmony_for_chords.wav',
-        )
-        metrics['Harmonia para cifra'] = stem_metrics(chord_audio)
+        with self._stage('harmonic_mix_selection') as stage_metrics:
+            other_audio, _ = librosa.load(stems['other'], sr=sr, mono=True)
+            bass_audio, _ = librosa.load(stems['bass'], sr=sr, mono=True)
+            chord_audio, choice_debug = select_chord_source(other_audio, bass_audio)
+            chord_path = self.workdir / 'harmony_for_chords.wav'
+            sf.write(chord_path, chord_audio, sr)
+            harmony_track = self._persist_track(
+                'Harmonia para cifra',
+                chord_path,
+                'harmony_for_chords.wav',
+            )
+            metrics['Harmonia para cifra'] = stem_metrics(chord_audio)
+            stage_metrics.update({
+                **choice_debug,
+                'output_size_bytes': chord_path.stat().st_size,
+                'output_metrics': metrics['Harmonia para cifra'],
+            })
 
         debug = {
             'metodo': 'demucs_htdemucs_cpu',
@@ -257,22 +332,28 @@ class HarmixPipeline:
         import numpy as np
         import soundfile as sf
 
-        self._delete_existing_tracks()
-        harmonic, percussive = librosa.effects.hpss(y)
-        chord_path = self.workdir / 'harmony_for_chords.wav'
-        percussion_path = self.workdir / 'percussion_fallback.wav'
-        sf.write(chord_path, harmonic, sr)
-        sf.write(percussion_path, percussive, sr)
-        harmony_track = self._persist_track(
-            'Harmonia para cifra',
-            chord_path,
-            'harmony_for_chords.wav',
-        )
-        self._persist_track(
-            'Percussao (fallback)',
-            percussion_path,
-            'percussion_fallback.wav',
-        )
+        with self._stage('hpss_fallback', {'reason': failure_reason}) as stage_metrics:
+            self._delete_existing_tracks()
+            harmonic, percussive = librosa.effects.hpss(y)
+            chord_path = self.workdir / 'harmony_for_chords.wav'
+            percussion_path = self.workdir / 'percussion_fallback.wav'
+            sf.write(chord_path, harmonic, sr)
+            sf.write(percussion_path, percussive, sr)
+            harmony_track = self._persist_track(
+                'Harmonia para cifra',
+                chord_path,
+                'harmony_for_chords.wav',
+            )
+            self._persist_track(
+                'Percussao (fallback)',
+                percussion_path,
+                'percussion_fallback.wav',
+            )
+            stage_metrics.update({
+                'audio_samples': len(y),
+                'harmonic_size_bytes': chord_path.stat().st_size,
+                'percussive_size_bytes': percussion_path.stat().st_size,
+            })
 
         total_energy = float(np.mean(y ** 2)) or 1e-9
         debug = {
@@ -343,6 +424,7 @@ class HarmixPipeline:
                 Path(chord_source_path),
                 duration,
                 librosa_fallback,
+                diagnostics=self._diagnostics if self._diagnostics_active else None,
             )
             raw_detections = [
                 {
@@ -362,32 +444,65 @@ class HarmixPipeline:
             chord_errors = ['harmony_path_unavailable']
 
         detected_count = len(raw_detections)
+        raw_snapshot = [dict(item) for item in raw_detections]
         if chord_source == 'chordino':
-            raw_detections = stabilize_chord_detections(raw_detections, bpm=bpm)
+            with self._stage(
+                'chord_stabilization',
+                {'source': chord_source, 'input_count': detected_count},
+            ) as metrics:
+                raw_detections = stabilize_chord_detections(raw_detections, bpm=bpm)
+                metrics.update({
+                    'output_count': len(raw_detections),
+                    'removed_or_merged': detected_count - len(raw_detections),
+                    'before_sample': raw_snapshot[:10],
+                    'after_sample': raw_detections[:10],
+                })
 
-        if self._rhythm_grid and bpm:
-            merged = quantize_detections(
-                raw_detections,
-                self._rhythm_grid,
-                self._merge_chord_detections,
-            )
-        elif bpm:
-            merged = self._beat_quantize(raw_detections, bpm)
-        else:
-            merged = self._merge_chord_detections(raw_detections)
+        stabilized_snapshot = [dict(item) for item in raw_detections]
 
-        pre_quantized = merged
+        with self._stage(
+            'chord_quantization',
+            {
+                'input_count': len(raw_detections),
+                'has_rhythm_grid': bool(self._rhythm_grid),
+                'bpm': bpm,
+            },
+        ) as metrics:
+            if self._rhythm_grid and bpm:
+                quantization_method = 'rhythm_grid'
+                merged = quantize_detections(
+                    raw_detections,
+                    self._rhythm_grid,
+                    self._merge_chord_detections,
+                )
+            elif bpm:
+                quantization_method = 'bpm_uniform_grid'
+                merged = self._beat_quantize(raw_detections, bpm)
+            else:
+                quantization_method = 'merge_only'
+                merged = self._merge_chord_detections(raw_detections)
+            metrics.update({
+                'method': quantization_method,
+                'output_count': len(merged),
+                'before_sample': stabilized_snapshot[:10],
+                'after_sample': merged[:10],
+            })
 
-        ChordSegment.objects.filter(track=track).delete()
-        segments = ChordSegment.objects.bulk_create([
-            ChordSegment(
-                track=track,
-                start_time=det['start_time'],
-                end_time=det['end_time'],
-                chord_name=det['chord_name'],
-            )
-            for det in merged
-        ])
+        with self._stage('chord_segment_persistence') as metrics:
+            deleted_count, _ = ChordSegment.objects.filter(track=track).delete()
+            segments = ChordSegment.objects.bulk_create([
+                ChordSegment(
+                    track=track,
+                    start_time=det['start_time'],
+                    end_time=det['end_time'],
+                    chord_name=det['chord_name'],
+                )
+                for det in merged
+            ])
+            metrics.update({
+                'deleted_count': deleted_count,
+                'created_count': len(segments),
+            })
 
         unique_chords = sorted({d['chord'] for d in raw_detections})
         inversions_found = [d['chord'] for d in raw_detections if '/' in d['chord']]
@@ -401,7 +516,9 @@ class HarmixPipeline:
             'total_apos_quantizacao_beat': len(merged),
             'acordes_unicos': unique_chords,
             'inversoes_detectadas': inversions_found[:10],
-            'amostra_deteccoes_brutas': raw_detections[:10],
+            'amostra_deteccoes_brutas': raw_snapshot[:10],
+            'amostra_apos_estabilizacao': stabilized_snapshot[:10],
+            'amostra_apos_quantizacao': merged[:10],
         }
         self._log('4_extracao_acordes', debug)
         return segments, debug
@@ -442,6 +559,16 @@ class HarmixPipeline:
 
             if index > 0 and index % 40 == 0:
                 pct = min(99, int(100 * index / len(starts)))
+                if self._diagnostics_active:
+                    self._diagnostics.event(
+                        'fallback_chord_progress',
+                        stage='librosa_chord_fallback',
+                        details={
+                            'completed_windows': index,
+                            'total_windows': len(starts),
+                            'percent': pct,
+                        },
+                    )
                 self._set_status(
                     MusicProject.Status.EXTRACTING_CHORDS,
                     f'Extraindo acordes principais ({pct}%).',
@@ -612,11 +739,25 @@ class HarmixPipeline:
             }
             for segment in chord_segments
         ]
-        structure = build_musical_structure(
-            chords,
-            self.project.bpm,
-            rhythm_grid=self._rhythm_grid.as_dict() if self._rhythm_grid else None,
-        ) if self.project.bpm else {}
+        with self._stage(
+            'musical_structure',
+            {'input_chords': len(chords), 'bpm': self.project.bpm},
+        ) as metrics:
+            structure = build_musical_structure(
+                chords,
+                self.project.bpm,
+                rhythm_grid=self._rhythm_grid.as_dict() if self._rhythm_grid else None,
+            ) if self.project.bpm else {}
+            metrics.update({
+                'measure_count': structure.get('measure_count', 0),
+                'output_chords': sum(
+                    len(measure.get('chords') or [])
+                    for measure in structure.get('measures') or []
+                ),
+                'rhythm_grid_source': (
+                    self._rhythm_grid.source if self._rhythm_grid else None
+                ),
+            })
         self._log('5_geracao_score', {
             'total_acordes': len(chords),
             'total_compassos': structure.get('measure_count', 0),
@@ -632,20 +773,41 @@ class HarmixPipeline:
             'chords': chords,
             'structure': structure,
             'pipeline_log': self._pipeline_log,
+            'pipeline_diagnostics': self._diagnostics.as_dict(),
         }
         score, _ = Score.objects.get_or_create(music_project=self.project)
         score.data = score_data
 
-        musicxml = self._make_musicxml(score_data)
-        score.musicxml_file.save(
-            f'project_{self.project.pk}.musicxml',
-            ContentFile(musicxml.encode('utf-8')),
-            save=False,
-        )
+        with self._stage('musicxml_generation') as metrics:
+            musicxml = self._make_musicxml(score_data)
+            musicxml_bytes = musicxml.encode('utf-8')
+            score.musicxml_file.save(
+                f'project_{self.project.pk}.musicxml',
+                ContentFile(musicxml_bytes),
+                save=False,
+            )
+            metrics.update({
+                'size_bytes': len(musicxml_bytes),
+                'measure_count': structure.get('measure_count', 0),
+            })
 
-        pdf_bytes = self._make_pdf(score_data)
-        score.pdf_file.save(f'project_{self.project.pk}.pdf', ContentFile(pdf_bytes), save=False)
-        score.save()
+        with self._stage('pdf_generation') as metrics:
+            pdf_bytes = self._make_pdf(score_data)
+            score.pdf_file.save(
+                f'project_{self.project.pk}.pdf',
+                ContentFile(pdf_bytes),
+                save=False,
+            )
+            metrics['size_bytes'] = len(pdf_bytes)
+
+        with self._stage('score_persistence') as metrics:
+            score.data['pipeline_diagnostics'] = self._diagnostics.as_dict()
+            score.save()
+            metrics.update({
+                'score_id': score.pk,
+                'musicxml_file': score.musicxml_file.name,
+                'pdf_file': score.pdf_file.name,
+            })
 
     def _make_musicxml(self, score_data):
         measures = []

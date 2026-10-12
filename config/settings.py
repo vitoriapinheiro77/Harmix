@@ -163,3 +163,35 @@ AUTH_USER_MODEL = 'accounts.User'
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Pipeline diagnostics are emitted as structured JSON by the worker. Set
+# HARMIX_LOG_LEVEL=DEBUG when a more verbose processing trace is needed.
+HARMIX_LOG_LEVEL = os.environ.get('HARMIX_LOG_LEVEL', 'INFO').upper()
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'harmix': {
+            'format': '{asctime} {levelname} {name} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'harmix',
+        },
+    },
+    'loggers': {
+        'music': {
+            'handlers': ['console'],
+            'level': HARMIX_LOG_LEVEL,
+            'propagate': False,
+        },
+        'harmix.analysis': {
+            'handlers': ['console'],
+            'level': HARMIX_LOG_LEVEL,
+            'propagate': False,
+        },
+    },
+}

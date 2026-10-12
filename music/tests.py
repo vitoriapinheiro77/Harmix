@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock, patch
 from copy import deepcopy
+from io import StringIO
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -7,6 +8,7 @@ from xml.etree import ElementTree as ET
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 
@@ -15,6 +17,7 @@ from .analysis.bpm_detector import _madmom_primary_bpm
 from .analysis.chord_stability import harmonic_family, stabilize_chord_detections
 from .models import MusicProject, Score, Track
 from .pipeline import HarmixPipeline
+from .pipeline_diagnostics import PipelineDiagnostics
 from .separation import SeparationError, run_demucs, select_chord_source
 from .structure import MusicalStructureBuilder, build_musical_structure
 from .musicxml import MEASURES_PER_SYSTEM, MUSICXML_DIVISIONS, render_musicxml
@@ -1563,3 +1566,84 @@ class SeparationTests(TestCase):
         command = mock_run.call_args.args[0]
         self.assertIn('--device', command)
         self.assertIn('cpu', command)
+
+
+class PipelineDiagnosticsTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            email='diagnostics@harmix.test',
+            password='test-pass-123',
+        )
+        self.project = MusicProject.objects.create(
+            user=self.user,
+            title='Pipeline diagnostics',
+        )
+
+    def test_collector_records_stage_metrics_and_completion(self):
+        snapshots = []
+        diagnostics = PipelineDiagnostics(
+            self.project.pk,
+            on_change=lambda value: snapshots.append(value),
+        )
+
+        diagnostics.start({'source': 'test'})
+        with diagnostics.stage('example_stage') as metrics:
+            metrics.update({'input_count': 4, 'output_count': 3})
+        diagnostics.finish('completed')
+
+        result = diagnostics.as_dict()
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual(result['stages'][0]['name'], 'example_stage')
+        self.assertEqual(result['stages'][0]['details']['input_count'], 4)
+        self.assertGreaterEqual(result['total_duration_seconds'], 0)
+        self.assertTrue(snapshots)
+
+    def test_pipeline_persists_incremental_diagnostics_in_score_data(self):
+        pipeline = HarmixPipeline(self.project)
+        try:
+            pipeline._diagnostics_active = True
+            pipeline._diagnostics.start({'source': 'test'})
+            with pipeline._stage('database_test') as metrics:
+                metrics['rows'] = 2
+            pipeline._diagnostics.finish('completed')
+            pipeline._diagnostics_active = False
+        finally:
+            pipeline._cleanup_workdir()
+
+        score = Score.objects.get(music_project=self.project)
+        diagnostics = score.data['pipeline_diagnostics']
+        self.assertEqual(diagnostics['status'], 'completed')
+        self.assertEqual(diagnostics['stages'][0]['details']['rows'], 2)
+
+    def test_pipeline_report_identifies_slowest_stage(self):
+        Score.objects.create(
+            music_project=self.project,
+            data={
+                'pipeline_diagnostics': {
+                    'run_id': 'test-run',
+                    'status': 'completed',
+                    'total_duration_seconds': 5.0,
+                    'peak_memory_mb': 100.0,
+                    'stages': [
+                        {
+                            'name': 'fast_stage',
+                            'status': 'completed',
+                            'duration_seconds': 1.0,
+                        },
+                        {
+                            'name': 'slow_stage',
+                            'status': 'completed',
+                            'duration_seconds': 4.0,
+                        },
+                    ],
+                    'events': [],
+                },
+            },
+        )
+        output = StringIO()
+
+        call_command('pipeline_report', self.project.pk, stdout=output)
+
+        report = output.getvalue()
+        self.assertIn('slow_stage', report)
+        self.assertIn('Gargalo provavel', report)
