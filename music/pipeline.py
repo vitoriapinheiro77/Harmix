@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 from django.core.files import File
 from django.core.files.base import ContentFile
+from django.conf import settings
 from django.utils import timezone
 
 from .analysis.analysis_pipeline import run_chord_analysis, run_rhythm_analysis
@@ -123,7 +124,7 @@ class HarmixPipeline:
             self.project.save(update_fields=['bpm', 'key', 'updated_at'])
             self._log('2_analise_ritmo', rhythm.as_dict())
 
-            self._set_status(MusicProject.Status.SEPARATING, 'Separando voz, bateria, baixo e acompanhamento.')
+            self._set_status(MusicProject.Status.SEPARATING, 'Preparando audio para extracao de acordes.')
             harmony_track, y_harmonic, harmony_path, sep_debug = self._separate_tracks(
                 audio_path,
                 y,
@@ -254,16 +255,48 @@ class HarmixPipeline:
         return best_key, best_score
 
     def _separate_tracks(self, audio_path, y, sr):
-        """Create four source-separation stems and a chord-oriented harmonic mix."""
+        """Choose the harmonic audio used by Chordino."""
+        if settings.HARMIX_HARMONY_SOURCE == 'original':
+            return self._use_original_audio_for_chords(audio_path, y)
+        if settings.HARMIX_HARMONY_SOURCE == 'demucs':
+            try:
+                return self._separate_tracks_demucs(audio_path, sr)
+            except SeparationError as exc:
+                logger.warning('Demucs falhou; usando HPSS: %s', exc)
+                return self._separate_tracks_hpss_fallback(y, sr, str(exc))
+        if settings.HARMIX_HARMONY_SOURCE != 'hpss':
+            raise ValueError('HARMIX_HARMONY_SOURCE deve ser original, hpss ou demucs.')
         try:
-            return self._separate_tracks_demucs(audio_path, sr)
+            return self._separate_tracks_hpss_fallback(y, sr, 'fonte_principal')
         except SeparationError as exc:
-            logger.warning(
-                'Demucs indisponivel para projeto %s; usando HPSS. Motivo: %s',
-                self.project.pk,
-                exc,
+            logger.warning('HPSS sem energia harmonica suficiente; usando Demucs: %s', exc)
+            return self._separate_tracks_demucs(audio_path, sr)
+
+    def _use_original_audio_for_chords(self, audio_path, y):
+        """Keep the uploaded mix intact when it is the Chordino source."""
+        audio_path = Path(audio_path)
+        with self._stage('original_audio_source', {'audio_file': audio_path.name}) as stage_metrics:
+            if not audio_path.exists():
+                raise SeparationError('Arquivo de audio original nao encontrado para extracao de acordes.')
+            self._delete_existing_tracks()
+            track = self._persist_track(
+                'Audio original (para cifra)',
+                audio_path,
+                audio_path.name,
             )
-            return self._separate_tracks_hpss_fallback(y, sr, str(exc))
+            stage_metrics.update({
+                'size_bytes': audio_path.stat().st_size,
+                'audio_preserved_without_separation': True,
+            })
+
+        debug = {
+            'metodo': 'audio_original',
+            'stems_gerados': ['Audio original (para cifra)'],
+            'stem_escolhido_chordino': 'audio_original',
+            'audio_preservado_sem_separacao': True,
+        }
+        self._log('3_separacao_harmonica', debug)
+        return track, y, audio_path, debug
 
     def _separate_tracks_demucs(self, audio_path, sr):
         import librosa
@@ -333,10 +366,23 @@ class HarmixPipeline:
         import soundfile as sf
 
         with self._stage('hpss_fallback', {'reason': failure_reason}) as stage_metrics:
+            try:
+                harmonic, percussive = librosa.effects.hpss(y)
+            except Exception as exc:
+                raise SeparationError(f'HPSS falhou: {exc}') from exc
+            harmonic_metrics = stem_metrics(harmonic)
+            original_energy = float(np.mean(y ** 2)) if len(y) else 0.0
+            harmonic_energy = float(np.mean(harmonic ** 2)) if len(harmonic) else 0.0
+            energy_ratio = harmonic_energy / original_energy if original_energy > 0 else 0.0
+            stage_metrics.update({
+                'harmonic_metrics': harmonic_metrics,
+                'harmonic_energy_ratio': round(energy_ratio, 4),
+            })
+            if harmonic_metrics['rms'] < 0.003 or energy_ratio < 0.08:
+                raise SeparationError('HPSS gerou uma fonte harmonica fraca.')
             self._delete_existing_tracks()
-            harmonic, percussive = librosa.effects.hpss(y)
             chord_path = self.workdir / 'harmony_for_chords.wav'
-            percussion_path = self.workdir / 'percussion_fallback.wav'
+            percussion_path = self.workdir / 'percussion_hpss.wav'
             sf.write(chord_path, harmonic, sr)
             sf.write(percussion_path, percussive, sr)
             harmony_track = self._persist_track(
@@ -345,9 +391,9 @@ class HarmixPipeline:
                 'harmony_for_chords.wav',
             )
             self._persist_track(
-                'Percussao (fallback)',
+                'Percussao (HPSS)',
                 percussion_path,
-                'percussion_fallback.wav',
+                'percussion_hpss.wav',
             )
             stage_metrics.update({
                 'audio_samples': len(y),
@@ -355,14 +401,17 @@ class HarmixPipeline:
                 'percussive_size_bytes': percussion_path.stat().st_size,
             })
 
-        total_energy = float(np.mean(y ** 2)) or 1e-9
         debug = {
-            'metodo': 'hpss_fallback',
-            'fallback_hpss': True,
+            'metodo': 'hpss_harmonico',
+            'fallback_hpss': failure_reason != 'fonte_principal',
             'motivo_fallback': failure_reason,
-            'stems_gerados': ['Harmonia para cifra', 'Percussao (fallback)'],
-            'energia_harmonica_ratio': round(float(np.mean(harmonic ** 2)) / total_energy, 4),
-            'energia_percussiva_ratio': round(float(np.mean(percussive ** 2)) / total_energy, 4),
+            'stems_gerados': ['Harmonia para cifra', 'Percussao (HPSS)'],
+            'energia_harmonica_ratio': round(energy_ratio, 4),
+            'energia_percussiva_ratio': round(
+                float(np.mean(percussive ** 2)) / original_energy if original_energy else 0.0,
+                4,
+            ),
+            'metricas_stems': {'Harmonia para cifra': harmonic_metrics},
             'stem_escolhido_chordino': 'harmonia_hpss',
         }
         self._log('3_separacao_harmonica', debug)

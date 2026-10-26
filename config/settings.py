@@ -167,6 +167,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Pipeline diagnostics are emitted as structured JSON by the worker. Set
 # HARMIX_LOG_LEVEL=DEBUG when a more verbose processing trace is needed.
 HARMIX_LOG_LEVEL = os.environ.get('HARMIX_LOG_LEVEL', 'INFO').upper()
+HARMIX_HARMONY_SOURCE = os.environ.get('HARMIX_HARMONY_SOURCE', 'original').lower()
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,

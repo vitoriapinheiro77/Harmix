@@ -49,6 +49,9 @@ class MeasureDecisionThresholds:
     phase_min_margin: float = 0.12
     phase_min_reliable_anchors: int = 6
     phase_anchor_max_distance: int = 3
+    phase_override_min_global_agreement: float = 0.85
+    phase_override_min_repetitions: float = 8.0
+    phase_override_min_local_agreement: float = 0.70
     single_local_contradiction_beats: float = 2.5
     single_local_contradiction_ratio: float = 0.65
     single_expected_min_support_beats: float = 1.5
@@ -954,7 +957,32 @@ class MusicalStructureBuilder:
                 )
                 continue
 
-            if self._has_strong_local_contradiction(decision, expected_now):
+            phase_context = self._phase_context_at(decisions, index, pattern)
+            has_override_phase_context = self._has_override_phase_context(
+                pattern,
+                phase_context,
+            )
+            if not phase_context['is_determined'] and not has_override_phase_context:
+                logger.info(
+                    'Phase-based single correction blocked on measure %s: phase_context anchors=%s agreement=%.2f margin=%.2f.',
+                    decision.measure.number,
+                    phase_context['anchor_count'],
+                    phase_context['agreement'],
+                    phase_context['margin'],
+                )
+                continue
+
+            strong_local_contradiction = self._has_strong_local_contradiction(
+                decision,
+                expected_now,
+            )
+            can_override_strong_local = self._can_override_strong_single(
+                decision,
+                pattern,
+                phase_context,
+                expected_now,
+            )
+            if strong_local_contradiction and not can_override_strong_local:
                 logger.info(
                     'Phase-based single correction blocked on measure %s: strong_local_evidence detected=%s expected=%s.',
                     decision.measure.number,
@@ -963,21 +991,13 @@ class MusicalStructureBuilder:
                 )
                 continue
 
-            if not self._has_expected_local_support(decision, expected_now):
+            if (
+                not strong_local_contradiction
+                and not self._has_expected_local_support(decision, expected_now)
+            ):
                 logger.info(
                     'Phase-based single correction blocked on measure %s: expected_local_support.',
                     decision.measure.number,
-                )
-                continue
-
-            phase_context = self._phase_context_at(decisions, index, pattern)
-            if not phase_context['is_determined']:
-                logger.info(
-                    'Phase-based single correction blocked on measure %s: phase_context anchors=%s agreement=%.2f margin=%.2f.',
-                    decision.measure.number,
-                    phase_context['anchor_count'],
-                    phase_context['agreement'],
-                    phase_context['margin'],
                 )
                 continue
 
@@ -988,17 +1008,27 @@ class MusicalStructureBuilder:
                 )
                 continue
 
+            corrected_evidence = dict(decision.evidence)
+            corrected_evidence.setdefault(
+                expected_now,
+                {
+                    'duration': 0.0,
+                    'start': decision.measure.start_beat,
+                    'end': decision.measure.end_beat,
+                    'source_label': self._family_label(expected_now, family_labels),
+                },
+            )
             corrected[index] = MeasureHarmonyDecision(
                 measure=decision.measure,
-                evidence=decision.evidence,
-                eligible=decision.evidence,
+                evidence=corrected_evidence,
+                eligible=corrected_evidence,
                 selected_families=(expected_now,),
                 duration_winner_family=decision.duration_winner_family,
                 entry_family=decision.entry_family,
                 primary_family=expected_now,
                 pattern_learning_family=expected_now,
                 primary_ratio=(
-                    decision.evidence[expected_now]['duration']
+                    corrected_evidence[expected_now]['duration']
                     / self.time_signature.beats_per_measure
                 ),
                 secondary_family=None,
@@ -1007,18 +1037,60 @@ class MusicalStructureBuilder:
                 secondary_start_beat=None,
                 status='single',
                 corrected_by_pattern=True,
-                pattern_reason='phase-aligned single correction',
+                pattern_reason=(
+                    'high-confidence phase override'
+                    if can_override_strong_local
+                    else 'phase-aligned single correction'
+                ),
             )
             logger.info(
-                'Phase-based single correction on measure %s: %s -> %s phase=%s local_agreement=%.2f anchors=%s.',
+                'Phase-based single correction on measure %s: %s -> %s phase=%s local_agreement=%.2f anchors=%s override_strong_local=%s.',
                 decision.measure.number,
                 self._family_label(decision.primary_family, family_labels),
                 self._family_label(expected_now, family_labels),
                 pattern.phase,
                 phase_context['agreement'],
                 phase_context['anchor_count'],
+                can_override_strong_local,
             )
         return corrected
+
+    def _can_override_strong_single(
+        self,
+        decision,
+        pattern,
+        phase_context,
+        expected_family,
+    ):
+        """Permit an isolated full-measure misread only under strong cycle evidence."""
+        expected_evidence = decision.evidence.get(expected_family)
+        thresholds = self.decision_thresholds
+        expected_is_weak = (
+            not expected_evidence
+            or expected_evidence['duration']
+            < thresholds.single_expected_min_support_beats
+            or (
+                expected_evidence['duration'] / self.time_signature.beats_per_measure
+                < thresholds.single_expected_min_support_ratio
+            )
+        )
+        return (
+            expected_is_weak
+            and pattern.global_agreement >= thresholds.phase_override_min_global_agreement
+            and pattern.repetition_count >= thresholds.phase_override_min_repetitions
+            and phase_context['agreement'] >= thresholds.phase_override_min_local_agreement
+        )
+
+    def _has_override_phase_context(self, pattern, phase_context):
+        """Allow a strong long-form pattern to resolve an early isolated misread."""
+        thresholds = self.decision_thresholds
+        return (
+            phase_context['anchor_count'] >= thresholds.phase_min_reliable_anchors
+            and phase_context['agreement'] >= thresholds.phase_override_min_local_agreement
+            and phase_context['margin'] >= thresholds.phase_min_margin
+            and pattern.global_agreement >= thresholds.phase_override_min_global_agreement
+            and pattern.repetition_count >= thresholds.phase_override_min_repetitions
+        )
 
     def _has_strong_local_contradiction(self, decision, expected_family):
         primary = decision.evidence.get(decision.primary_family)
@@ -1108,30 +1180,32 @@ class MusicalStructureBuilder:
 
     def _has_phase_anchors(self, decisions, index, pattern):
         max_distance = self.decision_thresholds.phase_anchor_max_distance
-        previous = next(
-            (
-                (anchor_index, decisions[anchor_index])
-                for anchor_index in range(index - 1, max(-1, index - max_distance - 1), -1)
-                if self._is_phase_reliable_anchor(decisions[anchor_index])
-            ),
-            None,
+        previous = self._nearest_matching_phase_anchor(
+            decisions,
+            index,
+            pattern,
+            range(index - 1, max(-1, index - max_distance - 1), -1),
         )
-        following = next(
-            (
-                (anchor_index, decisions[anchor_index])
-                for anchor_index in range(index + 1, min(len(decisions), index + max_distance + 1))
-                if self._is_phase_reliable_anchor(decisions[anchor_index])
-            ),
-            None,
+        following = self._nearest_matching_phase_anchor(
+            decisions,
+            index,
+            pattern,
+            range(index + 1, min(len(decisions), index + max_distance + 1)),
         )
         if not previous or not following:
             return False
+        return True
 
-        return all(
-            decision.pattern_learning_family
-            == self._expected_pattern_family(pattern, anchor_index)
-            for anchor_index, decision in (previous, following)
-        )
+    def _nearest_matching_phase_anchor(self, decisions, index, pattern, candidates):
+        for anchor_index in candidates:
+            decision = decisions[anchor_index]
+            if (
+                self._is_phase_reliable_anchor(decision)
+                and decision.pattern_learning_family
+                == self._expected_pattern_family(pattern, anchor_index)
+            ):
+                return anchor_index, decision
+        return None
 
     def _can_pattern_correct_measure(
         self,

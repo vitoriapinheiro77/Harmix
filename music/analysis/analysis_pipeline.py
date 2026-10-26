@@ -7,6 +7,7 @@ from . import logging_utils
 from .beat_detector import detect_beats
 from .bpm_detector import detect_bpm
 from .chord_detector import detect_chords
+from .rhythm_validation import validate_rhythm_grid
 from .types import MusicalAnalysisResult, RhythmGrid
 
 
@@ -51,6 +52,9 @@ def run_rhythm_analysis(audio_path: Path, diagnostics=None) -> tuple[float | Non
             'errors': list(rhythm.errors),
         })
     logging_utils.log_beat_result(rhythm)
+    with _stage(diagnostics, 'rhythm_grid_validation') as metrics:
+        rhythm = validate_rhythm_grid(rhythm)
+        metrics.update(rhythm.validation)
     return bpm, rhythm
 
 

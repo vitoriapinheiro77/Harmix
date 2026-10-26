@@ -10,10 +10,13 @@ from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.test import TestCase
+from django.test import override_settings
 from django.urls import reverse
 
 from .analysis.chordino_labels import chord_changes_to_events, normalize_chordino_label
 from .analysis.bpm_detector import _madmom_primary_bpm
+from .analysis.rhythm_validation import validate_rhythm_grid
+from .analysis.types import RhythmGrid
 from .analysis.chord_stability import harmonic_family, stabilize_chord_detections
 from .models import MusicProject, Score, Track
 from .pipeline import HarmixPipeline
@@ -278,10 +281,10 @@ class MusicalStructureBuilderTests(TestCase):
         ]
         self.assertEqual(chord_names, [['C', 'G'], ['Am', 'F'], ['C', 'G'], ['Am', 'F']])
 
-    def test_cycle_phase_blocks_single_with_strong_local_contradiction(self):
+    def test_high_confidence_cycle_overrides_a_weak_one_beat_fragment(self):
         chord_events = []
         progression = ['F', 'F', 'C', 'Em7']
-        for measure_index in range(16):
+        for measure_index in range(36):
             measure_start = measure_index * 4.0
             chord_name = progression[measure_index % len(progression)]
             if measure_index == 7:
@@ -313,13 +316,42 @@ class MusicalStructureBuilderTests(TestCase):
 
         self.assertEqual(
             [chord['chord_name'] for chord in structure['measures'][7]['chords']],
-            ['C'],
+            ['Em7'],
         )
         log_output = '\n'.join(captured_logs.output)
         self.assertIn('Detected cycle phase: phase=0 expected_measure_one=F', log_output)
         self.assertIn(
-            'Phase-based single correction blocked on measure 8: strong_local_evidence detected=C expected=Em7.',
+            'Phase-based single correction on measure 8: C -> Em7',
             log_output,
+        )
+
+    def test_high_confidence_cycle_corrects_isolated_full_measure_misreads(self):
+        chord_events = []
+        progression = ['F', 'F', 'C', 'Em7']
+        misreads = {7: 'C'}
+        for measure_index in range(36):
+            measure_start = measure_index * 4.0
+            chord_events.append(
+                {
+                    'start_time': measure_start,
+                    'end_time': measure_start + 4.0,
+                    'chord_name': misreads.get(
+                        measure_index,
+                        progression[measure_index % len(progression)],
+                    ),
+                }
+            )
+
+        with self.assertLogs('music.structure', level='INFO') as captured_logs:
+            structure = build_musical_structure(chord_events, bpm=60)
+
+        self.assertEqual(
+            [measure['chords'][0]['chord_name'] for measure in structure['measures']],
+            progression * 9,
+        )
+        self.assertIn(
+            'override_strong_local=True',
+            '\n'.join(captured_logs.output),
         )
 
     def test_pattern_is_not_applied_after_section_break(self):
@@ -1510,6 +1542,7 @@ class ProjectReprocessTests(TestCase):
 
     @patch.object(HarmixPipeline, '_separate_tracks_hpss_fallback')
     @patch.object(HarmixPipeline, '_separate_tracks_demucs')
+    @override_settings(HARMIX_HARMONY_SOURCE='demucs')
     def test_pipeline_uses_hpss_when_demucs_fails(self, mock_demucs, mock_fallback):
         mock_demucs.side_effect = SeparationError('sem memoria')
         mock_fallback.return_value = ('track', 'audio', 'path', {'fallback_hpss': True})
@@ -1521,6 +1554,162 @@ class ProjectReprocessTests(TestCase):
 
         self.assertEqual(result[3]['fallback_hpss'], True)
         mock_fallback.assert_called_once_with([0.0], 22050, 'sem memoria')
+
+    @patch.object(HarmixPipeline, '_use_original_audio_for_chords')
+    @patch.object(HarmixPipeline, '_separate_tracks_demucs')
+    @patch.object(HarmixPipeline, '_separate_tracks_hpss_fallback')
+    @override_settings(HARMIX_HARMONY_SOURCE='original')
+    def test_pipeline_uses_original_audio_by_default(
+        self,
+        mock_hpss,
+        mock_demucs,
+        mock_original,
+    ):
+        mock_original.return_value = ('track', 'audio', 'path', {'metodo': 'audio_original'})
+        pipeline = HarmixPipeline(self.project)
+        try:
+            result = pipeline._separate_tracks('source.wav', [0.0], 22050)
+        finally:
+            pipeline._cleanup_workdir()
+
+        self.assertEqual(result[3]['metodo'], 'audio_original')
+        mock_original.assert_called_once_with('source.wav', [0.0])
+        mock_hpss.assert_not_called()
+        mock_demucs.assert_not_called()
+
+    @patch.object(HarmixPipeline, '_delete_existing_tracks')
+    @patch.object(HarmixPipeline, '_persist_track', return_value=MagicMock())
+    def test_original_audio_source_keeps_the_uploaded_file_for_chordino(
+        self,
+        mock_persist,
+        mock_delete,
+    ):
+        import numpy as np
+
+        pipeline = HarmixPipeline(self.project)
+        try:
+            source_path = pipeline.workdir / 'uploaded-song.mp3'
+            source_path.write_bytes(b'original-audio')
+
+            track, audio, returned_path, debug = pipeline._use_original_audio_for_chords(
+                source_path,
+                np.array([0.1, -0.1]),
+            )
+
+            self.assertEqual(track, mock_persist.return_value)
+            self.assertEqual(returned_path, source_path)
+            self.assertEqual(audio.tolist(), [0.1, -0.1])
+            self.assertEqual(debug['metodo'], 'audio_original')
+            mock_delete.assert_called_once()
+            mock_persist.assert_called_once_with(
+                'Audio original (para cifra)',
+                source_path,
+                'uploaded-song.mp3',
+            )
+        finally:
+            pipeline._cleanup_workdir()
+
+    @patch.object(HarmixPipeline, '_separate_tracks_hpss_fallback')
+    @patch.object(HarmixPipeline, '_separate_tracks_demucs')
+    @override_settings(HARMIX_HARMONY_SOURCE='hpss')
+    def test_pipeline_uses_hpss_without_running_demucs(self, mock_demucs, mock_hpss):
+        mock_hpss.return_value = ('track', 'audio', 'path', {'metodo': 'hpss_harmonico'})
+        pipeline = HarmixPipeline(self.project)
+        try:
+            result = pipeline._separate_tracks('source.wav', [0.0], 22050)
+        finally:
+            pipeline._cleanup_workdir()
+
+        self.assertEqual(result[3]['metodo'], 'hpss_harmonico')
+        mock_demucs.assert_not_called()
+
+    @patch.object(HarmixPipeline, '_separate_tracks_hpss_fallback')
+    @patch.object(HarmixPipeline, '_separate_tracks_demucs')
+    @override_settings(HARMIX_HARMONY_SOURCE='hpss')
+    def test_pipeline_uses_demucs_when_hpss_fails(self, mock_demucs, mock_hpss):
+        mock_hpss.side_effect = SeparationError('fonte harmonica fraca')
+        mock_demucs.return_value = ('track', 'audio', 'path', {'metodo': 'demucs'})
+        pipeline = HarmixPipeline(self.project)
+        try:
+            result = pipeline._separate_tracks('source.wav', [0.0], 22050)
+        finally:
+            pipeline._cleanup_workdir()
+
+        self.assertEqual(result[3]['metodo'], 'demucs')
+        mock_demucs.assert_called_once_with('source.wav', 22050)
+
+
+class RhythmValidationTests(TestCase):
+    def test_rejects_half_beats_and_half_bar_downbeats(self):
+        beats = [float(index) for index in range(16)]
+        beats[4:4] = [3.5]
+        beats[10:10] = [8.5]
+        rhythm = RhythmGrid(
+            bpm=60,
+            beats=beats,
+            downbeats=[0, 2, 4, 6, 8, 10, 12, 14],
+        )
+
+        validated = validate_rhythm_grid(rhythm)
+
+        self.assertEqual(validated.beats, [float(index) for index in range(16)])
+        self.assertEqual(validated.downbeats, [0.0, 4.0, 8.0, 12.0])
+        self.assertEqual(len(validated.raw_beats), 18)
+        self.assertEqual(validated.validation['discarded_subdivisions'], 2)
+        self.assertEqual(validated.validation['raw_downbeat_count'], 8)
+
+    def test_infers_an_isolated_missing_beat(self):
+        rhythm = RhythmGrid(bpm=60, beats=[0, 1, 2, 4, 5, 6], downbeats=[0, 4])
+
+        validated = validate_rhythm_grid(rhythm)
+
+        self.assertEqual(validated.beats, [0, 1, 2, 3, 4, 5, 6])
+        self.assertEqual(validated.validation['inferred_beats'], 1)
+        self.assertEqual(validated.raw_beats, [0, 1, 2, 4, 5, 6])
+
+    def test_accepts_gradual_and_real_tempo_changes(self):
+        intervals = [1.0, 0.98, 0.96, 0.94, 0.92, 0.90, 0.76, 0.75, 0.74, 0.73]
+        beats = [0.0]
+        for interval in intervals:
+            beats.append(beats[-1] + interval)
+        rhythm = RhythmGrid(bpm=60, beats=beats, downbeats=[0.0])
+
+        validated = validate_rhythm_grid(rhythm)
+
+        self.assertEqual(len(validated.beats), len(beats))
+        self.assertEqual(validated.validation['discarded_subdivisions'], 0)
+        self.assertEqual(validated.validation['inferred_beats'], 0)
+
+    def test_sustained_slower_tempo_is_not_treated_as_missing_beats(self):
+        rhythm = RhythmGrid(
+            bpm=60,
+            beats=[0, 1, 2, 3, 4, 5.7, 7.4, 9.1, 10.8, 12.5, 14.2],
+            downbeats=[0, 4, 10.8],
+        )
+
+        validated = validate_rhythm_grid(rhythm)
+
+        self.assertEqual(validated.validation['inferred_beats'], 0)
+        self.assertEqual(validated.beats, rhythm.raw_beats)
+
+    def test_sou_casa_region_keeps_four_beat_measure_boundaries(self):
+        rhythm = RhythmGrid(
+            bpm=65.21739130434783,
+            beats=[
+                21.77, 22.69, 23.60, 24.52, 25.44, 26.37, 27.29,
+                27.75, 28.21, 28.67, 29.13, 29.60, 30.06, 30.99,
+                31.91, 32.83, 33.75, 34.68, 35.59, 36.52,
+            ],
+            downbeats=[21.76, 23.59, 25.44, 27.29, 29.12, 30.98, 32.82, 34.67, 36.52],
+        )
+
+        validated = validate_rhythm_grid(rhythm)
+
+        self.assertEqual(len(validated.beats), 17)
+        self.assertEqual(
+            [round(value, 2) for value in validated.downbeats],
+            [21.77, 25.44, 29.13, 32.83, 36.52],
+        )
 
 
 class SeparationTests(TestCase):
@@ -1647,3 +1836,27 @@ class PipelineDiagnosticsTests(TestCase):
         report = output.getvalue()
         self.assertIn('slow_stage', report)
         self.assertIn('Gargalo provavel', report)
+
+    @patch.object(HarmixPipeline, '_delete_existing_tracks')
+    @patch.object(HarmixPipeline, '_persist_track', return_value=MagicMock())
+    def test_hpss_produces_a_chordino_audio_file(self, mock_persist, mock_delete):
+        import numpy as np
+
+        sr = 22050
+        times = np.arange(sr * 2) / sr
+        audio = (0.2 * np.sin(2 * np.pi * 220 * times)).astype(np.float32)
+        pipeline = HarmixPipeline(self.project)
+        try:
+            _track, harmonic, path, debug = pipeline._separate_tracks_hpss_fallback(
+                audio,
+                sr,
+                'fonte_principal',
+            )
+            self.assertTrue(path.exists())
+            self.assertEqual(len(harmonic), len(audio))
+            self.assertEqual(debug['metodo'], 'hpss_harmonico')
+            self.assertFalse(debug['fallback_hpss'])
+            self.assertEqual(mock_persist.call_count, 2)
+            mock_delete.assert_called_once()
+        finally:
+            pipeline._cleanup_workdir()
