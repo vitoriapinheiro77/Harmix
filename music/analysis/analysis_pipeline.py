@@ -61,7 +61,6 @@ def run_rhythm_analysis(audio_path: Path, diagnostics=None) -> tuple[float | Non
 def run_chord_analysis(
     audio_path: Path,
     duration: float,
-    fallback_fn,
     diagnostics=None,
 ) -> MusicalAnalysisResult:
     started = time.perf_counter()
@@ -69,7 +68,6 @@ def run_chord_analysis(
         chord_result = detect_chords(
             audio_path,
             duration,
-            fallback_fn,
             diagnostics=diagnostics,
         )
         metrics.update({

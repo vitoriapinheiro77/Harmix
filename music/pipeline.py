@@ -255,7 +255,7 @@ class HarmixPipeline:
         return best_key, best_score
 
     def _separate_tracks(self, audio_path, y, sr):
-        """Choose the harmonic audio used by Chordino."""
+        """Choose the audio source used by LV-Chordia."""
         if settings.HARMIX_HARMONY_SOURCE == 'original':
             return self._use_original_audio_for_chords(audio_path, y)
         if settings.HARMIX_HARMONY_SOURCE == 'demucs':
@@ -455,46 +455,29 @@ class HarmixPipeline:
         duration = float(librosa.get_duration(y=y, sr=sr))
         chord_source_path = audio_path if audio_path and Path(audio_path).exists() else None
 
-        def librosa_fallback():
-            raw = self._collect_librosa_chord_detections(y, sr, track)
-            merged = self._merge_chord_detections(raw)
-            return [
-                {
-                    'start_time': item['start_time'],
-                    'end_time': item['end_time'],
-                    'chord_name': item['chord_name'],
-                    'confidence': item.get('confidence', 0.0),
-                }
-                for item in merged
-            ]
+        if not chord_source_path:
+            raise RuntimeError('Audio para deteccao do LV-Chordia nao encontrado.')
 
-        if chord_source_path:
-            chord_analysis = run_chord_analysis(
-                Path(chord_source_path),
-                duration,
-                librosa_fallback,
-                diagnostics=self._diagnostics if self._diagnostics_active else None,
-            )
-            raw_detections = [
-                {
-                    'start': event.start_time,
-                    'end': event.end_time,
-                    'chord': event.chord_name,
-                    'confidence': event.confidence,
-                }
-                for event in chord_analysis.chords.chords
-            ]
-            chord_source = chord_analysis.chords.source
-            chord_errors = chord_analysis.chords.errors
-        else:
-            raw = self._collect_librosa_chord_detections(y, sr, track)
-            raw_detections = raw
-            chord_source = 'librosa'
-            chord_errors = ['harmony_path_unavailable']
+        chord_analysis = run_chord_analysis(
+            Path(chord_source_path),
+            duration,
+            diagnostics=self._diagnostics if self._diagnostics_active else None,
+        )
+        raw_detections = [
+            {
+                'start': event.start_time,
+                'end': event.end_time,
+                'chord': event.chord_name,
+                'confidence': event.confidence,
+            }
+            for event in chord_analysis.chords.chords
+        ]
+        chord_source = chord_analysis.chords.source
+        chord_errors = chord_analysis.chords.errors
 
         detected_count = len(raw_detections)
         raw_snapshot = [dict(item) for item in raw_detections]
-        if chord_source == 'chordino':
+        if chord_source == 'lv_chordia':
             with self._stage(
                 'chord_stabilization',
                 {'source': chord_source, 'input_count': detected_count},
