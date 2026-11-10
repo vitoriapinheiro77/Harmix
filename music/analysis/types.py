@@ -7,6 +7,8 @@ class RhythmGrid:
     beats: list[float] = field(default_factory=list)
     downbeats: list[float] = field(default_factory=list)
     beats_per_measure: int = 4
+    beat_unit: int = 4
+    meter: dict = field(default_factory=dict)
     source: str = 'librosa'
     errors: list[str] = field(default_factory=list)
     raw_beats: list[float] = field(default_factory=list)
@@ -19,6 +21,9 @@ class RhythmGrid:
             'beats': [round(value, 3) for value in self.beats[:500]],
             'downbeats': [round(value, 3) for value in self.downbeats[:200]],
             'beats_per_measure': self.beats_per_measure,
+            'beat_unit': self.beat_unit,
+            'time_signature': f'{self.beats_per_measure}/{self.beat_unit}',
+            'meter': self.meter,
             'source': self.source,
             'errors': self.errors,
             'total_beats': len(self.beats),

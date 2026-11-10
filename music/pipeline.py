@@ -17,6 +17,7 @@ from .analysis.analysis_pipeline import run_chord_analysis, run_rhythm_analysis
 from .analysis.beat_detector import quantize_detections
 from .analysis.chord_stability import stabilize_chord_detections
 from .models import ChordSegment, MusicProject, Score, Track
+from .musicxml import render_musicxml
 from .pdf_notation import draw_system_signature
 from .pipeline_diagnostics import PipelineDiagnostics
 from .separation import SeparationError, run_demucs, select_chord_source, stem_metrics
@@ -789,12 +790,25 @@ class HarmixPipeline:
                 'rhythm_grid_source': (
                     self._rhythm_grid.source if self._rhythm_grid else None
                 ),
+                'time_signature': structure.get('time_signature', {}).get('label'),
+                'meter_confidence': (
+                    self._rhythm_grid.meter.get('confidence')
+                    if self._rhythm_grid else None
+                ),
+                'meter_low_confidence': (
+                    self._rhythm_grid.meter.get('low_confidence')
+                    if self._rhythm_grid else None
+                ),
             })
         self._log('5_geracao_score', {
             'total_acordes': len(chords),
             'total_compassos': structure.get('measure_count', 0),
             'bpm_final': self.project.bpm,
             'tom_final': self.project.key,
+            'compasso_detectado': structure.get('time_signature', {}).get('label'),
+            'evidencias_compasso': (
+                self._rhythm_grid.meter if self._rhythm_grid else {}
+            ),
             'amostra_acordes': chords[:8],
         })
         score_data = {
@@ -842,39 +856,7 @@ class HarmixPipeline:
             })
 
     def _make_musicxml(self, score_data):
-        measures = []
-        structured_measures = score_data.get('structure', {}).get('measures') or []
-        if structured_measures:
-            for measure in structured_measures:
-                measures.append(self._make_musicxml_measure(measure))
-        else:
-            for index, chord in enumerate(score_data['chords'], start=1):
-                measures.append(
-                    self._make_musicxml_measure(
-                        {
-                            'number': index,
-                            'chords': [
-                                {
-                                    'chord_name': chord['chord_name'],
-                                    'beat_duration': 4,
-                                }
-                            ],
-                        }
-                    )
-                )
-
-        return f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.1 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
-<score-partwise version="3.1">
-  <work><work-title>{html.escape(score_data['title'])}</work-title></work>
-  <part-list>
-    <score-part id="P1"><part-name>Harmix Lead Sheet</part-name></score-part>
-  </part-list>
-  <part id="P1">
-    {''.join(measures)}
-  </part>
-</score-partwise>
-"""
+        return render_musicxml(score_data)
 
     def _make_musicxml_measure(self, measure):
         chord_blocks = []
@@ -989,6 +971,11 @@ class HarmixPipeline:
             .get('time_signature', {})
             .get('beats_per_measure', 4)
         )
+        beat_unit = (
+            score_data.get('structure', {})
+            .get('time_signature', {})
+            .get('beat_unit', 4)
+        )
         left = 1.7 * cm
         right = width - 1.4 * cm
         top = height - 1.8 * cm
@@ -1016,6 +1003,7 @@ class HarmixPipeline:
                 width=staff_width,
                 line_gap=staff_line_gap,
                 beats_per_measure=beats_per_measure,
+                beat_unit=beat_unit,
                 is_first_system=index == 0,
             )
             y -= system_gap
@@ -1057,7 +1045,18 @@ class HarmixPipeline:
         pdf.setFont('Helvetica', 10)
         pdf.drawRightString(width - side_margin, y, artist)
 
-    def _draw_pdf_system(self, pdf, measures, x, y, width, line_gap, beats_per_measure=4, is_first_system=False):
+    def _draw_pdf_system(
+        self,
+        pdf,
+        measures,
+        x,
+        y,
+        width,
+        line_gap,
+        beats_per_measure=4,
+        beat_unit=4,
+        is_first_system=False,
+    ):
         from reportlab.lib.units import cm
 
         staff_height = line_gap * 4
@@ -1081,6 +1080,8 @@ class HarmixPipeline:
             staff_top,
             line_gap,
             include_time_signature=is_first_system,
+            beats=beats_per_measure,
+            beat_unit=beat_unit,
         )
         first_measure_padding = max(signature_end - x, 0.55 * cm if is_first_system else 0.42 * cm)
 

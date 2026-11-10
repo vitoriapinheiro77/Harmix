@@ -154,8 +154,16 @@ class MusicalStructureBuilder:
         if not bpm or bpm <= 0:
             raise ValueError('BPM valido e necessario para converter segundos em compassos.')
         self.bpm = float(bpm)
-        self.time_signature = time_signature or TimeSignature()
         self.rhythm_grid = rhythm_grid or {}
+        if time_signature is None and self.rhythm_grid:
+            try:
+                time_signature = TimeSignature(
+                    beats_per_measure=int(self.rhythm_grid.get('beats_per_measure') or 4),
+                    beat_unit=int(self.rhythm_grid.get('beat_unit') or 4),
+                )
+            except (TypeError, ValueError):
+                time_signature = None
+        self.time_signature = time_signature or TimeSignature()
         self.decision_thresholds = (
             decision_thresholds or DEFAULT_MEASURE_DECISION_THRESHOLDS
         )
@@ -294,6 +302,9 @@ class MusicalStructureBuilder:
                 'source': self.rhythm_grid.get('source'),
                 'beat_offset_seconds': round(self.beat_offset, 3),
                 'beats_per_measure': self.rhythm_grid.get('beats_per_measure', self.time_signature.beats_per_measure),
+                'beat_unit': self.rhythm_grid.get('beat_unit', self.time_signature.beat_unit),
+                'time_signature': self.time_signature.as_dict()['label'],
+                'meter': self.rhythm_grid.get('meter', {}),
                 'total_beats': self.rhythm_grid.get('total_beats'),
                 'total_downbeats': self.rhythm_grid.get('total_downbeats'),
             },

@@ -13,7 +13,10 @@ from reportlab.lib.units import cm
 
 BRAVURA_PATH = Path(__file__).resolve().parent / 'assets' / 'fonts' / 'Bravura.otf'
 G_CLEF_GLYPH = 'uniE050'
-TIME_SIG_4_GLYPH = 'uniE084'
+TIME_SIGNATURE_GLYPHS = {
+    digit: f'uniE08{digit}'
+    for digit in range(10)
+}
 NOTATION_COLOR = Color(0.08, 0.08, 0.08)
 
 
@@ -71,7 +74,7 @@ def draw_treble_clef(pdf, x, staff_top, line_gap):
     return _draw_bravura_glyph(pdf, G_CLEF_GLYPH, origin_x, staff_bottom, scale)[0]
 
 
-def draw_time_signature_44(pdf, x_after_clef, staff_top, line_gap):
+def draw_time_signature(pdf, x_after_clef, staff_top, line_gap, beats=4, beat_unit=4):
     staff_bottom = staff_top - (4 * line_gap)
     scale = line_gap / 250.0
     sig_x = x_after_clef + (0.04 * cm)
@@ -81,20 +84,30 @@ def draw_time_signature_44(pdf, x_after_clef, staff_top, line_gap):
     bottom_center_y = staff_bottom + (375 * scale)
 
     right_x = _draw_bravura_glyph_centered(
-        pdf, TIME_SIG_4_GLYPH, digit_center_x, top_center_y, scale
+        pdf, TIME_SIGNATURE_GLYPHS.get(int(beats), TIME_SIGNATURE_GLYPHS[4]), digit_center_x, top_center_y, scale
     )
     right_x = max(
         right_x,
         _draw_bravura_glyph_centered(
-            pdf, TIME_SIG_4_GLYPH, digit_center_x, bottom_center_y, scale
+            pdf, TIME_SIGNATURE_GLYPHS.get(int(beat_unit), TIME_SIGNATURE_GLYPHS[4]), digit_center_x, bottom_center_y, scale
         ),
     )
     return right_x
 
 
-def draw_system_signature(pdf, x, staff_top, line_gap, include_time_signature=False):
+def draw_system_signature(
+    pdf,
+    x,
+    staff_top,
+    line_gap,
+    include_time_signature=False,
+    beats=4,
+    beat_unit=4,
+):
     clef_right = draw_treble_clef(pdf, x, staff_top, line_gap)
     content_start = clef_right + (0.06 * cm)
     if include_time_signature:
-        content_start = draw_time_signature_44(pdf, clef_right, staff_top, line_gap) + (0.06 * cm)
+        content_start = draw_time_signature(
+            pdf, clef_right, staff_top, line_gap, beats=beats, beat_unit=beat_unit
+        ) + (0.06 * cm)
     return content_start

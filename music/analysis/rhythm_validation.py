@@ -37,7 +37,7 @@ def _local_interval(beats, nominal, thresholds):
 
 
 def validate_rhythm_grid(rhythm, thresholds=DEFAULT_RHYTHM_THRESHOLDS):
-    """Reject half-beat events, fill isolated gaps and select 4/4 downbeats.
+    """Clean beat events and select canonical downbeats for the chosen meter.
 
     Madmom events remain available in raw_beats/raw_downbeats. This function
     does not double the beat count when the DBN reports half-bar downbeats.
@@ -46,7 +46,17 @@ def validate_rhythm_grid(rhythm, thresholds=DEFAULT_RHYTHM_THRESHOLDS):
     raw_downbeats = sorted({float(value) for value in rhythm.downbeats if float(value) >= 0})
     rhythm.raw_beats = raw_beats
     rhythm.raw_downbeats = raw_downbeats
-    nominal = 60.0 / rhythm.bpm if rhythm.bpm and rhythm.bpm > 0 else None
+    selected_hypothesis = (
+        (rhythm.meter.get('hypotheses') or {}).get(str(rhythm.beats_per_measure), {})
+        if rhythm.meter else {}
+    )
+    nominal = (
+        selected_hypothesis.get('median_subdivision_seconds')
+        if rhythm.beats_per_measure == 6
+        else None
+    )
+    if not nominal:
+        nominal = 60.0 / rhythm.bpm if rhythm.bpm and rhythm.bpm > 0 else None
     if nominal is None and len(raw_beats) > 1:
         nominal = median(right - left for left, right in zip(raw_beats, raw_beats[1:]))
     if not raw_beats or not nominal:
@@ -120,6 +130,10 @@ def validate_rhythm_grid(rhythm, thresholds=DEFAULT_RHYTHM_THRESHOLDS):
     rhythm.downbeats = canonical_downbeats
     rhythm.validation = {
         'status': 'validated',
+        'time_signature': f'{rhythm.beats_per_measure}/{rhythm.beat_unit}',
+        'meter_confidence': rhythm.meter.get('confidence', 0.0) if rhythm.meter else 0.0,
+        'meter_low_confidence': rhythm.meter.get('low_confidence', True) if rhythm.meter else True,
+        'meter_evidence': rhythm.meter,
         'confidence': round(
             max(0.0, min(1.0, (
                 (len(kept) - len(inferred)) / max(len(kept), 1)
