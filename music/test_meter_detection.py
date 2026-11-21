@@ -41,6 +41,25 @@ def _accent_path(activations, path, meter, fps=100):
 
 
 class MeterDecisionTests(SimpleTestCase):
+    def test_simple_meters_require_a_clear_lead_and_stronger_downbeats(self):
+        for meter in (2, 3):
+            with self.subTest(meter=meter):
+                result = select_meter({
+                    4: _hypothesis(0.62, downbeat_strength=0.4),
+                    6: _hypothesis(0.61, downbeat_strength=0.4),
+                    meter: _hypothesis(0.78, downbeat_strength=0.65),
+                })
+                self.assertEqual(result['label'], f'{meter}/4')
+
+    def test_close_three_four_and_six_eight_scores_remain_ambiguous(self):
+        result = select_meter({
+            4: _hypothesis(0.60, downbeat_strength=0.4),
+            3: _hypothesis(0.77, downbeat_strength=0.65),
+            6: _hypothesis(0.79, downbeat_strength=0.66),
+        })
+        self.assertEqual(result['label'], '4/4')
+        self.assertTrue(result['low_confidence'])
+
     def test_real_scoring_recognizes_four_four_accent_pattern(self):
         paths = {
             4: _path(4, 0.0, 0.5, 8),

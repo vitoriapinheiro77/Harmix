@@ -5,6 +5,7 @@ from statistics import median
 
 from . import logging_utils
 from .beat_detector import detect_beats
+from .beat_this_tracker import compare_beat_this
 from .bpm_detector import detect_bpm
 from .chord_detector import detect_chords
 from .rhythm_validation import validate_rhythm_grid
@@ -58,6 +59,12 @@ def run_rhythm_analysis(audio_path: Path, diagnostics=None) -> tuple[float | Non
     with _stage(diagnostics, 'rhythm_grid_validation') as metrics:
         rhythm = validate_rhythm_grid(rhythm)
         metrics.update(rhythm.validation)
+    if diagnostics:
+        with _stage(diagnostics, 'beat_this_comparison') as metrics:
+            try:
+                metrics.update(compare_beat_this(audio_path, rhythm))
+            except Exception as exc:
+                metrics['comparison_error'] = str(exc)
     return bpm, rhythm
 
 

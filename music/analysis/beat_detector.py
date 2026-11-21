@@ -2,7 +2,7 @@ import numpy as np
 import gc
 from statistics import median
 
-from .meter_detection import detect_meter
+from .meter_detection import METER_CONFIG, detect_meter
 from .types import RhythmGrid
 
 
@@ -26,7 +26,7 @@ def _detect_beats_madmom(audio_path, rhythm: RhythmGrid):
     # was overwritten below. Evaluate each meter sequentially to bound the
     # peak for long recordings.
     paths = {}
-    for meter in (4, 6):
+    for meter in METER_CONFIG:
         tracker = DBNDownBeatTrackingProcessor(beats_per_bar=[meter], fps=100)
         paths[meter] = tracker(downbeat_activations)
         del tracker

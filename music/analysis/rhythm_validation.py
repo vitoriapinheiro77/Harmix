@@ -52,7 +52,7 @@ def validate_rhythm_grid(rhythm, thresholds=DEFAULT_RHYTHM_THRESHOLDS):
     )
     nominal = (
         selected_hypothesis.get('median_subdivision_seconds')
-        if rhythm.beats_per_measure == 6
+        if rhythm.beats_per_measure != 4
         else None
     )
     if not nominal:

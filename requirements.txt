@@ -3,7 +3,7 @@ psycopg2-binary==2.9.10
 gunicorn==23.0.0
 whitenoise==6.6.0
 celery==5.4.0
-redis==5.2.1
+redis==6.4.0
 yt-dlp==2025.1.15
 librosa==0.10.2.post1
 soundfile==0.12.1
@@ -13,4 +13,5 @@ reportlab==4.2.5
 mutagen==1.47.0
 fonttools==4.56.0
 lv-chordia==1.1.0
+beat-this==1.1.0
 madmom-modern @ git+https://github.com/imcmurray/madmom-modern.git
